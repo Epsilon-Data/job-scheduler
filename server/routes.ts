@@ -41,8 +41,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { code, state } = req.query;
       
-      if (!code || !state || state !== req.session.oauthState) {
-        return res.status(400).json({ message: "Invalid OAuth callback" });
+      console.log("OAuth callback:", { code: !!code, state, sessionState: req.session.oauthState });
+      
+      if (!code) {
+        return res.status(400).json({ message: "No authorization code received" });
+      }
+      
+      if (!state) {
+        return res.status(400).json({ message: "No state parameter received" });
+      }
+      
+      if (state !== req.session.oauthState) {
+        console.log("State mismatch:", { received: state, expected: req.session.oauthState });
+        return res.status(400).json({ message: "State parameter mismatch" });
       }
       
       const { accessToken, user: githubUser } = await githubApi.exchangeCodeForToken(code as string, req);
@@ -79,6 +90,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error("GitHub OAuth error:", error);
       res.redirect("/auth?error=oauth_failed");
     }
+  });
+
+  // Add a test endpoint to check session state
+  app.get("/api/debug/session", (req, res) => {
+    res.json({
+      hasSession: !!req.session,
+      sessionId: req.session?.id,
+      oauthState: req.session?.oauthState,
+      userId: req.session?.userId,
+    });
   });
 
   app.post("/api/auth/logout", (req, res) => {

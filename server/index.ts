@@ -11,11 +11,12 @@ app.use(express.urlencoded({ extended: false }));
 app.use(session({
   secret: process.env.SESSION_SECRET || "your-secret-key-here",
   resave: false,
-  saveUninitialized: false,
+  saveUninitialized: true, // Allow session creation for OAuth flow
   cookie: {
     secure: process.env.NODE_ENV === "production",
     httpOnly: true,
     maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+    sameSite: "lax", // Allow cross-site requests for OAuth
   },
 }));
 
