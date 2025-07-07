@@ -22,18 +22,18 @@ export default function CreateJobRequest({ params }: CreateJobRequestProps) {
   const [, setLocation] = useLocation();
 
   const { data: workspace, isLoading } = useQuery<Workspace>({
-    queryKey: ["/api/workspaces", params.workspaceId],
+    queryKey: [`/api/workspaces/${params.workspaceId}`],
     enabled: user?.approvalStatus === "approved",
   });
 
   const { data: latestCommit } = useQuery({
     queryKey: [`/api/github/repos/${workspace?.githubRepo}/commits/${workspace?.githubBranch}`],
-    enabled: !!workspace,
+    enabled: !!workspace?.githubRepo && !!workspace?.githubBranch,
   });
 
   const { data: repoFiles } = useQuery({
     queryKey: [`/api/github/repos/${workspace?.githubRepo}/contents`],
-    enabled: !!workspace,
+    enabled: !!workspace?.githubRepo,
   });
 
   const createJobMutation = useMutation({

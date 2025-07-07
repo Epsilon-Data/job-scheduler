@@ -197,6 +197,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(workspace);
   });
 
+  app.get("/api/workspaces/:id", async (req, res) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    
+    const workspace = await storage.getWorkspace(req.params.id);
+    if (!workspace) {
+      return res.status(404).json({ message: "Workspace not found" });
+    }
+    
+    // Check if user owns workspace
+    if (workspace.userId !== req.session.userId) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+    
+    res.json(workspace);
+  });
+
   app.post("/api/workspaces", async (req, res) => {
     if (!req.session.userId) {
       return res.status(401).json({ message: "Not authenticated" });
