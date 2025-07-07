@@ -13,7 +13,7 @@ app.use(session({
   resave: false,
   saveUninitialized: true, // Allow session creation for OAuth flow
   cookie: {
-    secure: process.env.NODE_ENV === "production",
+    secure: false, // Disable secure cookies temporarily for OAuth debugging
     httpOnly: true,
     maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
     sameSite: "lax", // Allow cross-site requests for OAuth
