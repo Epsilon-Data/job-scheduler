@@ -18,7 +18,7 @@ export const users = pgTable("users", {
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
   approvedAt: timestamp("approved_at"),
-  approvedBy: uuid("approved_by").references(() => users.id),
+  approvedBy: uuid("approved_by"),
 });
 
 export const workspaces = pgTable("workspaces", {

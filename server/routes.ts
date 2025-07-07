@@ -1,10 +1,22 @@
-import type { Express } from "express";
+import type { Express, Request } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { insertUserSchema, insertWorkspaceSchema, insertJobRequestSchema, approvalRequestSchema } from "@shared/schema";
 import { z } from "zod";
 import { fromZodError } from "zod-validation-error";
 import { githubApi } from "./github";
+
+// Extend Express Request type to include session
+declare module "express-serve-static-core" {
+  interface Request {
+    session: {
+      userId?: string;
+      accessToken?: string;
+      oauthState?: string;
+      destroy: (callback: (err: any) => void) => void;
+    };
+  }
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // GitHub OAuth routes
@@ -47,7 +59,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           fullName: githubUser.name || '',
           avatarUrl: githubUser.avatar_url || '',
           role: "user",
-          approvalStatus: "pending",
+          approvalStatus: "pending"
         });
       }
       
@@ -70,7 +82,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/auth/logout", (req, res) => {
-    req.session.destroy((err) => {
+    req.session.destroy((err: any) => {
       if (err) {
         return res.status(500).json({ message: "Failed to logout" });
       }
@@ -200,15 +212,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const commitInfo = await githubApi.getLatestCommit(
         validatedData.githubRepo,
         validatedData.githubBranch,
-        req.session.accessToken
+        req.session.accessToken!
       );
       
       const workspace = await storage.createWorkspace({
         ...validatedData,
-        lastCommitSha: commitInfo.sha,
-        lastCommitMessage: commitInfo.message,
-        lastCommitAuthor: commitInfo.author,
-        lastCommitDate: commitInfo.date,
+        userId: req.session.userId!,
       });
       
       res.json(workspace);
@@ -268,12 +277,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const commitInfo = await githubApi.getLatestCommit(
         workspace.githubRepo,
         workspace.githubBranch,
-        req.session.accessToken
+        req.session.accessToken!
       );
       
       const jobRequest = await storage.createJobRequest({
         workspaceId: workspace.id,
-        userId: req.session.userId,
+        userId: req.session.userId!,
         commitSha: commitInfo.sha,
         commitMessage: commitInfo.message,
         commitAuthor: commitInfo.author,
