@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Settings, Github, GitBranch, GitCommit, Eye, Download, X } from "lucide-react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import type { Workspace, JobRequest } from "@shared/schema";
 
 interface WorkspaceDetailProps {
@@ -19,6 +19,7 @@ export default function WorkspaceDetail({ params }: WorkspaceDetailProps) {
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [, setLocation] = useLocation();
 
   const { data: workspace, isLoading } = useQuery<Workspace>({
     queryKey: [`/api/workspaces/${params.id}`],
@@ -26,8 +27,13 @@ export default function WorkspaceDetail({ params }: WorkspaceDetailProps) {
   });
 
   const { data: jobRequests = [] } = useQuery<JobRequest[]>({
-    queryKey: ["/api/workspaces", params.id, "jobs"],
+    queryKey: [`/api/workspaces/${params.id}/jobs`],
     enabled: !!workspace,
+  });
+
+  const { data: latestCommit } = useQuery({
+    queryKey: [`/api/github/repos/${workspace?.githubRepo}/commits/${workspace?.githubBranch}`],
+    enabled: !!workspace?.githubRepo && !!workspace?.githubBranch,
   });
 
   const createJobMutation = useMutation({
@@ -150,9 +156,14 @@ export default function WorkspaceDetail({ params }: WorkspaceDetailProps) {
               <div className="flex items-center">
                 <GitCommit className="mr-2 h-4 w-4 text-muted-foreground" />
                 <span className="text-sm font-medium text-foreground">
-                  {workspace.lastCommitSha?.substring(0, 7) || "N/A"}
+                  {latestCommit?.sha?.substring(0, 7) || latestCommit?.commit?.sha?.substring(0, 7) || "Loading..."}
                 </span>
               </div>
+              {latestCommit && (
+                <div className="mt-2 text-xs text-muted-foreground">
+                  {latestCommit.message || latestCommit.commit?.message || "No message"}
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>

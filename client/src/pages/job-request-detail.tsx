@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Download, GitCommit, User, Clock, CheckCircle } from "lucide-react";
+import { Download, GitCommit, User, Clock, CheckCircle, X, Eye } from "lucide-react";
 import { Link } from "wouter";
 import type { JobRequest } from "@shared/schema";
 
@@ -57,6 +57,36 @@ export default function JobRequestDetail({ params }: JobRequestDetailProps) {
         return "bg-gray-100 text-gray-800";
     }
   };
+
+  const mockOutput = jobRequest.status === "completed" ? 
+    `Job completed successfully at ${new Date().toISOString()}
+
+=== Job Execution Summary ===
+Repository: ${jobRequest.commitSha?.substring(0, 7)}
+Total files processed: 42
+Data rows analyzed: 15,847
+Processing time: 245 seconds
+
+=== Analysis Results ===
+✓ Data validation completed
+✓ Statistical analysis finished  
+✓ Report generation successful
+✓ Quality checks passed
+
+Generated files:
+- analysis_report.html (247 KB)
+- data_summary.csv (89 KB)  
+- figures/plot_1.png (156 KB)
+- figures/plot_2.png (203 KB)
+- logs/execution.log (45 KB)
+
+=== Summary Statistics ===
+Mean age: 45.7 ± 12.3 years
+Sample size: 1,247 participants
+P-value: 0.0034 (significant)
+Effect size: 0.68 (medium)
+
+Job completed with exit code 0` : null;
 
   const formatDuration = (seconds: number | null) => {
     if (!seconds) return "-";
