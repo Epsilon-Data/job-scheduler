@@ -46,7 +46,7 @@ export const githubApi = {
       throw new Error("GitHub OAuth not configured");
     }
     
-    const redirectUri = `${req.protocol}://${req.get('host')}/api/auth/github/callback`;
+    const redirectUri = `https://${req.get('host')}/api/auth/github/callback`;
     
     // Exchange code for access token
     const tokenResponse = await fetch("https://github.com/login/oauth/access_token", {
@@ -66,7 +66,8 @@ export const githubApi = {
     const tokenData = await tokenResponse.json();
     
     if (!tokenData.access_token) {
-      throw new Error("Failed to get access token");
+      console.error("GitHub token exchange failed:", tokenData);
+      throw new Error(`Failed to get access token: ${tokenData.error_description || tokenData.error || 'Unknown error'}`);
     }
     
     // Get user info
