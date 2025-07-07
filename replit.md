@@ -98,7 +98,17 @@ TRE is a full-stack web application designed to provide a secure, managed enviro
 
 Preferred communication style: Simple, everyday language.
 
+## Recent Changes
+
+- July 07, 2025: Enhanced GitHub integration with beautiful code viewer
+  - Added GitHub-style file browser with folder navigation 
+  - Implemented line-numbered code viewer with syntax highlighting
+  - Fixed workspace detail API endpoint and git info display
+  - Added commit details (author, date, hash) display
+  - Fixed job creation redirect flow to return to workspace
+
 ## Changelog
 
 Changelog:
-- July 07, 2025. Initial setup
+- July 07, 2025. Initial setup with authentication, approval workflow, and workspace management
+- July 07, 2025. Enhanced with GitHub repository browsing and job creation interface

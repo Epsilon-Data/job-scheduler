@@ -21,7 +21,7 @@ export default function WorkspaceDetail({ params }: WorkspaceDetailProps) {
   const queryClient = useQueryClient();
 
   const { data: workspace, isLoading } = useQuery<Workspace>({
-    queryKey: ["/api/workspaces", params.id],
+    queryKey: [`/api/workspaces/${params.id}`],
     enabled: user?.approvalStatus === "approved",
   });
 

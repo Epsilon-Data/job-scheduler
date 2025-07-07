@@ -70,10 +70,11 @@ export default function CreateJobRequest({ params }: CreateJobRequestProps) {
     onSuccess: (jobRequest) => {
       toast({
         title: "Job request created",
-        description: `Job ${jobRequest.jobId} has been submitted successfully.`,
+        description: `Job request has been submitted successfully.`,
       });
       queryClient.invalidateQueries({ queryKey: ["/api/workspaces", params.workspaceId, "jobs"] });
-      setLocation(`/jobs/${jobRequest.id}`);
+      queryClient.invalidateQueries({ queryKey: ["/api/user/jobs"] });
+      setLocation(`/workspaces/${params.workspaceId}`);
     },
     onError: (error: Error) => {
       toast({

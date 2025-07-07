@@ -395,7 +395,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     
     try {
       const { owner, repo } = req.params;
-      const path = req.params[0]; // Get the wildcard path
+      const path = (req.params as any)[0]; // Get the wildcard path
       const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}`, {
         headers: {
           "Authorization": `token ${req.session.accessToken}`,
