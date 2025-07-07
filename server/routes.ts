@@ -248,6 +248,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Job Request routes
+  app.get("/api/user/jobs", async (req, res) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    
+    const jobRequests = await storage.getJobRequestsByUserId(req.session.userId);
+    res.json(jobRequests);
+  });
   app.get("/api/workspaces/:id/jobs", async (req, res) => {
     if (!req.session.userId) {
       return res.status(401).json({ message: "Not authenticated" });

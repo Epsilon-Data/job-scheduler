@@ -11,8 +11,6 @@ export default function UserDashboard() {
   const { user } = useAuth();
   const [location] = useLocation();
   
-  console.log("Current location:", location);
-
   const { data: workspaces = [], isLoading } = useQuery<Workspace[]>({
     queryKey: ["/api/workspaces"],
     enabled: user?.approvalStatus === "approved",
@@ -69,11 +67,7 @@ export default function UserDashboard() {
   const runningJobs = jobRequests.filter(job => job.status === "running").length;
   const queuedJobs = jobRequests.filter(job => job.status === "queued").length;
 
-  // Debug logging
-  console.log("Dashboard render - location:", location);
-  console.log("Dashboard render - workspaces:", workspaces.length);
-  console.log("Dashboard render - jobRequests:", jobRequests.length);
-  console.log("Dashboard render - jobRequests data:", jobRequests);
+
 
   return (
     <div className="min-h-screen bg-background">
@@ -211,9 +205,6 @@ export default function UserDashboard() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-xs text-muted-foreground mb-4">
-                Debug: Found {jobRequests.length} job requests, location: {location}
-              </div>
               {jobRequests.length === 0 ? (
                 <div className="text-center py-8">
                   <p className="text-muted-foreground mb-4">No job requests yet.</p>
