@@ -26,7 +26,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(500).json({ message: "GitHub OAuth not configured" });
     }
     
-    const redirectUri = `${req.protocol}://${req.get('host')}/api/auth/github/callback`;
+    const redirectUri = `https://${req.get('host')}/api/auth/github/callback`;
     const scope = "user:email,read:user,repo";
     const state = Math.random().toString(36).substring(2, 15);
     
