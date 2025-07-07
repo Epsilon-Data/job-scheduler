@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, GitCommit, User, Calendar, Code, FileCode, Eye, File, Folder, ChevronRight, ChevronDown } from "lucide-react";
+import { ArrowLeft, GitCommit, User, Calendar, Code, FileCode, Eye, File, Folder, ChevronRight, ChevronDown, FolderOpen } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import type { Workspace } from "@shared/schema";
 import { useState } from "react";
@@ -22,7 +22,8 @@ export default function CreateJobRequest({ params }: CreateJobRequestProps) {
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  const [currentPath, setCurrentPath] = useState<string>("");
+  const [folderContents, setFolderContents] = useState<{ [key: string]: any[] }>({});
 
   const { data: workspace, isLoading } = useQuery<Workspace>({
     queryKey: [`/api/workspaces/${params.workspaceId}`],
@@ -35,14 +36,31 @@ export default function CreateJobRequest({ params }: CreateJobRequestProps) {
   });
 
   const { data: repoFiles } = useQuery({
-    queryKey: [`/api/github/repos/${workspace?.githubRepo}/contents`],
+    queryKey: [`/api/github/repos/${workspace?.githubRepo}/contents${currentPath ? `/${currentPath}` : ""}`],
     enabled: !!workspace?.githubRepo,
   });
 
   const { data: fileContent } = useQuery({
-    queryKey: [`/api/github/repos/${workspace?.githubRepo}/contents/${selectedFile}`],
+    queryKey: [`/api/github/repos/${workspace?.githubRepo}/contents/${currentPath ? `${currentPath}/` : ""}${selectedFile}`],
     enabled: !!workspace?.githubRepo && !!selectedFile,
   });
+
+  const handleFileClick = (file: any) => {
+    if (file.type === 'dir') {
+      const newPath = currentPath ? `${currentPath}/${file.name}` : file.name;
+      setCurrentPath(newPath);
+      setSelectedFile(null);
+    } else {
+      setSelectedFile(file.name);
+    }
+  };
+
+  const handleBackClick = () => {
+    const pathParts = currentPath.split('/');
+    pathParts.pop();
+    setCurrentPath(pathParts.join('/'));
+    setSelectedFile(null);
+  };
 
   const createJobMutation = useMutation({
     mutationFn: async () => {
@@ -211,19 +229,32 @@ export default function CreateJobRequest({ params }: CreateJobRequestProps) {
                 {/* File Browser */}
                 <div className="border-r border-border">
                   <div className="p-4 border-b bg-muted/30">
-                    <h3 className="font-semibold text-sm flex items-center">
-                      <Folder className="mr-2 h-4 w-4" />
-                      Files ({repoFiles.length})
-                    </h3>
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-semibold text-sm flex items-center">
+                        <FolderOpen className="mr-2 h-4 w-4" />
+                        Files ({repoFiles?.length || 0})
+                      </h3>
+                      {currentPath && (
+                        <Button variant="ghost" size="sm" onClick={handleBackClick} className="h-6 px-2">
+                          <ArrowLeft className="h-3 w-3 mr-1" />
+                          Back
+                        </Button>
+                      )}
+                    </div>
+                    {currentPath && (
+                      <div className="mt-2 text-xs text-muted-foreground font-mono">
+                        /{currentPath}
+                      </div>
+                    )}
                   </div>
                   <div className="max-h-96 overflow-y-auto">
-                    {repoFiles.map((file: any) => (
+                    {repoFiles?.map((file: any) => (
                       <div 
                         key={file.name} 
                         className={`flex items-center p-3 hover:bg-muted/50 cursor-pointer border-b border-border/50 transition-colors ${
-                          selectedFile === file.name ? 'bg-blue-50 dark:bg-blue-900/20 border-l-4 border-l-blue-500' : ''
+                          selectedFile === file.name && file.type === 'file' ? 'bg-blue-50 dark:bg-blue-900/20 border-l-4 border-l-blue-500' : ''
                         }`}
-                        onClick={() => file.type === 'file' && setSelectedFile(file.name)}
+                        onClick={() => handleFileClick(file)}
                       >
                         {file.type === "dir" ? (
                           <Folder className="mr-3 h-4 w-4 text-blue-500" />
@@ -237,7 +268,9 @@ export default function CreateJobRequest({ params }: CreateJobRequestProps) {
                              file.size ? `${(file.size / 1024).toFixed(1)} KB` : "File"}
                           </p>
                         </div>
-                        {file.type === "file" && (
+                        {file.type === "dir" ? (
+                          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                        ) : (
                           <div className="text-xs text-muted-foreground">
                             {selectedFile === file.name ? (
                               <Badge variant="secondary" className="text-xs">Selected</Badge>

@@ -388,13 +388,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/github/repos/:owner/:repo/contents/:path", async (req, res) => {
+  app.get("/api/github/repos/:owner/:repo/contents/*", async (req, res) => {
     if (!req.session.userId || !req.session.accessToken) {
       return res.status(401).json({ message: "Not authenticated" });
     }
     
     try {
-      const { owner, repo, path } = req.params;
+      const { owner, repo } = req.params;
+      const path = req.params[0]; // Get the wildcard path
       const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}`, {
         headers: {
           "Authorization": `token ${req.session.accessToken}`,
@@ -403,13 +404,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       
       if (!response.ok) {
-        throw new Error("Failed to fetch file content");
+        throw new Error("Failed to fetch content");
       }
       
       const content = await response.json();
       res.json(content);
     } catch (error) {
-      res.status(500).json({ message: "Failed to fetch file content" });
+      res.status(500).json({ message: "Failed to fetch content" });
     }
   });
 
