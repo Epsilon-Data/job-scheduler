@@ -5,9 +5,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, GitCommit, User, Calendar, Code, FileCode, Eye } from "lucide-react";
+import { ArrowLeft, GitCommit, User, Calendar, Code, FileCode, Eye, File, Folder, ChevronRight, ChevronDown } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import type { Workspace } from "@shared/schema";
+import { useState } from "react";
 
 interface CreateJobRequestProps {
   params: {
@@ -20,6 +21,8 @@ export default function CreateJobRequest({ params }: CreateJobRequestProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
 
   const { data: workspace, isLoading } = useQuery<Workspace>({
     queryKey: [`/api/workspaces/${params.workspaceId}`],
@@ -34,6 +37,11 @@ export default function CreateJobRequest({ params }: CreateJobRequestProps) {
   const { data: repoFiles } = useQuery({
     queryKey: [`/api/github/repos/${workspace?.githubRepo}/contents`],
     enabled: !!workspace?.githubRepo,
+  });
+
+  const { data: fileContent } = useQuery({
+    queryKey: [`/api/github/repos/${workspace?.githubRepo}/contents/${selectedFile}`],
+    enabled: !!workspace?.githubRepo && !!selectedFile,
   });
 
   const createJobMutation = useMutation({
@@ -156,26 +164,32 @@ export default function CreateJobRequest({ params }: CreateJobRequestProps) {
             <CardContent>
               <div className="space-y-4">
                 <div className="flex items-start justify-between">
-                  <div className="space-y-2">
-                    <p className="text-sm font-medium text-foreground">
-                      {latestCommit.commit?.message || "No commit message"}
+                  <div className="space-y-2 flex-1">
+                    <p className="text-lg font-medium text-foreground">
+                      {latestCommit.message || latestCommit.commit?.message || "No commit message"}
                     </p>
-                    <div className="flex items-center space-x-4 text-sm text-muted-foreground">
+                    <div className="flex items-center space-x-6 text-sm text-muted-foreground">
                       <div className="flex items-center">
-                        <User className="mr-1 h-4 w-4" />
-                        {latestCommit.commit?.author?.name || "Unknown"}
+                        <User className="mr-2 h-4 w-4" />
+                        <span className="font-medium">
+                          {latestCommit.author || latestCommit.commit?.author?.name || "Unknown Author"}
+                        </span>
                       </div>
                       <div className="flex items-center">
-                        <Calendar className="mr-1 h-4 w-4" />
-                        {latestCommit.commit?.author?.date ? 
-                          new Date(latestCommit.commit.author.date).toLocaleDateString() : 
-                          "Unknown date"
-                        }
+                        <Calendar className="mr-2 h-4 w-4" />
+                        <span>
+                          {latestCommit.date ? 
+                            new Date(latestCommit.date).toLocaleString() :
+                            latestCommit.commit?.author?.date ? 
+                              new Date(latestCommit.commit.author.date).toLocaleString() : 
+                              "Unknown date"
+                          }
+                        </span>
                       </div>
                     </div>
                   </div>
-                  <div className="text-sm font-mono bg-muted px-2 py-1 rounded">
-                    {latestCommit.sha?.substring(0, 7) || "Unknown"}
+                  <div className="text-sm font-mono bg-muted px-3 py-2 rounded-lg border">
+                    {(latestCommit.sha || latestCommit.commit?.sha || "Unknown").substring(0, 7)}
                   </div>
                 </div>
               </div>
@@ -183,38 +197,106 @@ export default function CreateJobRequest({ params }: CreateJobRequestProps) {
           </Card>
         )}
 
-        {/* Repository Files Preview */}
+        {/* Repository Files Browser */}
         {repoFiles && Array.isArray(repoFiles) && (
           <Card className="mb-8">
             <CardHeader>
               <CardTitle className="flex items-center">
-                <FileCode className="mr-2 h-5 w-5" />
+                <Code className="mr-2 h-5 w-5" />
                 Repository Files
               </CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="space-y-2 max-h-64 overflow-y-auto">
-                {repoFiles.slice(0, 10).map((file: any) => (
-                  <div key={file.name} className="flex items-center justify-between py-2 px-3 rounded-md hover:bg-muted">
-                    <div className="flex items-center">
-                      <FileCode className="mr-2 h-4 w-4 text-muted-foreground" />
-                      <span className="text-sm font-medium">{file.name}</span>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                      <span className="text-xs text-muted-foreground">{file.type}</span>
-                      {file.download_url && (
-                        <Button variant="ghost" size="sm">
-                          <Eye className="h-3 w-3" />
-                        </Button>
-                      )}
-                    </div>
+            <CardContent className="p-0">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-0 border-t">
+                {/* File Browser */}
+                <div className="border-r border-border">
+                  <div className="p-4 border-b bg-muted/30">
+                    <h3 className="font-semibold text-sm flex items-center">
+                      <Folder className="mr-2 h-4 w-4" />
+                      Files ({repoFiles.length})
+                    </h3>
                   </div>
-                ))}
-                {repoFiles.length > 10 && (
-                  <p className="text-sm text-muted-foreground text-center pt-2">
-                    ... and {repoFiles.length - 10} more files
-                  </p>
-                )}
+                  <div className="max-h-96 overflow-y-auto">
+                    {repoFiles.map((file: any) => (
+                      <div 
+                        key={file.name} 
+                        className={`flex items-center p-3 hover:bg-muted/50 cursor-pointer border-b border-border/50 transition-colors ${
+                          selectedFile === file.name ? 'bg-blue-50 dark:bg-blue-900/20 border-l-4 border-l-blue-500' : ''
+                        }`}
+                        onClick={() => file.type === 'file' && setSelectedFile(file.name)}
+                      >
+                        {file.type === "dir" ? (
+                          <Folder className="mr-3 h-4 w-4 text-blue-500" />
+                        ) : (
+                          <File className="mr-3 h-4 w-4 text-muted-foreground" />
+                        )}
+                        <div className="flex-1">
+                          <p className="font-medium text-sm">{file.name}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {file.type === "dir" ? "Directory" : 
+                             file.size ? `${(file.size / 1024).toFixed(1)} KB` : "File"}
+                          </p>
+                        </div>
+                        {file.type === "file" && (
+                          <div className="text-xs text-muted-foreground">
+                            {selectedFile === file.name ? (
+                              <Badge variant="secondary" className="text-xs">Selected</Badge>
+                            ) : (
+                              <Eye className="h-4 w-4 opacity-50" />
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                
+                {/* Code Viewer */}
+                <div className="flex flex-col">
+                  <div className="p-4 border-b bg-muted/30">
+                    <h3 className="font-semibold text-sm flex items-center">
+                      <FileCode className="mr-2 h-4 w-4" />
+                      {selectedFile || "Select a file to view"}
+                    </h3>
+                  </div>
+                  <div className="flex-1 max-h-96 overflow-y-auto">
+                    {selectedFile && fileContent ? (
+                      <div className="p-0">
+                        {fileContent.type === "file" && fileContent.content ? (
+                          <div className="relative">
+                            <pre className="text-xs font-mono bg-slate-50 dark:bg-slate-900 p-4 overflow-x-auto border-0 rounded-none">
+                              {atob(fileContent.content).split('\n').map((line, index) => (
+                                <div key={index} className="flex">
+                                  <span className="text-slate-400 dark:text-slate-500 select-none pr-4 text-right min-w-[3rem] border-r border-slate-200 dark:border-slate-700 mr-4">
+                                    {index + 1}
+                                  </span>
+                                  <code className="text-slate-800 dark:text-slate-200 flex-1">
+                                    {line}
+                                  </code>
+                                </div>
+                              ))}
+                            </pre>
+                          </div>
+                        ) : (
+                          <div className="text-center py-8 text-muted-foreground">
+                            <FileCode className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                            <p>Cannot preview this file type</p>
+                          </div>
+                        )}
+                      </div>
+                    ) : selectedFile ? (
+                      <div className="flex items-center justify-center py-8">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+                      </div>
+                    ) : (
+                      <div className="text-center py-8 text-muted-foreground">
+                        <Code className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                        <p className="text-sm">Select a file from the list to view its contents</p>
+                        <p className="text-xs mt-2">Click on any file to preview the source code</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </CardContent>
           </Card>
