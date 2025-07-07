@@ -65,6 +65,7 @@ export default function UserDashboard() {
 
   const completedJobs = jobRequests.filter(job => job.status === "completed").length;
   const runningJobs = jobRequests.filter(job => job.status === "running").length;
+  const queuedJobs = jobRequests.filter(job => job.status === "queued").length;
 
   return (
     <div className="min-h-screen bg-background">
@@ -74,50 +75,52 @@ export default function UserDashboard() {
           <p className="mt-2 text-muted-foreground">{getPageDescription()}</p>
         </div>
 
-        {/* Quick Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center">
-                <div className="p-2 bg-blue-100 rounded-lg">
-                  <Folder className="h-5 w-5 text-primary" />
+        {/* Quick Stats - Show only on Dashboard */}
+        {location === "/dashboard" && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <Card>
+              <CardContent className="p-6">
+                <div className="flex items-center">
+                  <div className="p-2 bg-blue-100 rounded-lg">
+                    <Folder className="h-5 w-5 text-primary" />
+                  </div>
+                  <div className="ml-4">
+                    <h3 className="text-lg font-semibold text-foreground">{workspaces.length}</h3>
+                    <p className="text-sm text-muted-foreground">Active Workspaces</p>
+                  </div>
                 </div>
-                <div className="ml-4">
-                  <h3 className="text-lg font-semibold text-foreground">{workspaces.length}</h3>
-                  <p className="text-sm text-muted-foreground">Active Workspaces</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
 
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center">
-                <div className="p-2 bg-green-100 rounded-lg">
-                  <Play className="h-5 w-5 text-success" />
+            <Card>
+              <CardContent className="p-6">
+                <div className="flex items-center">
+                  <div className="p-2 bg-green-100 rounded-lg">
+                    <Play className="h-5 w-5 text-green-600" />
+                  </div>
+                  <div className="ml-4">
+                    <h3 className="text-lg font-semibold text-foreground">{completedJobs}</h3>
+                    <p className="text-sm text-muted-foreground">Completed Jobs</p>
+                  </div>
                 </div>
-                <div className="ml-4">
-                  <h3 className="text-lg font-semibold text-foreground">{completedJobs}</h3>
-                  <p className="text-sm text-muted-foreground">Jobs Completed</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
 
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center">
-                <div className="p-2 bg-purple-100 rounded-lg">
-                  <Clock className="h-5 w-5 text-purple-600" />
+            <Card>
+              <CardContent className="p-6">
+                <div className="flex items-center">
+                  <div className="p-2 bg-yellow-100 rounded-lg">
+                    <Clock className="h-5 w-5 text-yellow-600" />
+                  </div>
+                  <div className="ml-4">
+                    <h3 className="text-lg font-semibold text-foreground">{queuedJobs + runningJobs}</h3>
+                    <p className="text-sm text-muted-foreground">Jobs Running</p>
+                  </div>
                 </div>
-                <div className="ml-4">
-                  <h3 className="text-lg font-semibold text-foreground">{runningJobs}</h3>
-                  <p className="text-sm text-muted-foreground">Jobs Running</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
 
         {/* Workspaces Section */}
         {(location === "/dashboard" || location === "/workspaces") && (
