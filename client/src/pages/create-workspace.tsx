@@ -69,7 +69,7 @@ export default function CreateWorkspace() {
   });
 
   const { data: branches = [] } = useQuery<GitHubBranch[]>({
-    queryKey: ["/api/github/repos", selectedRepo, "branches"],
+    queryKey: [`/api/github/repos/${selectedRepo}/branches`],
     enabled: !!selectedRepo,
   });
 
