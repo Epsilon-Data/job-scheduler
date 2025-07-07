@@ -11,6 +11,7 @@ import StaffDashboard from "@/pages/staff-dashboard";
 import UserDashboard from "@/pages/user-dashboard";
 import CreateWorkspace from "@/pages/create-workspace";
 import WorkspaceDetail from "@/pages/workspace-detail";
+import CreateJobRequest from "@/pages/create-job-request";
 import JobRequestDetail from "@/pages/job-request-detail";
 import NotFound from "@/pages/not-found";
 
@@ -39,6 +40,7 @@ function AppContent() {
         <Route path="/workspaces" component={UserDashboard} />
         <Route path="/workspaces/new" component={CreateWorkspace} />
         <Route path="/workspaces/:id" component={WorkspaceDetail} />
+        <Route path="/workspaces/:workspaceId/jobs/new" component={CreateJobRequest} />
         <Route path="/jobs/:id" component={JobRequestDetail} />
         <Route path="/staff" component={StaffDashboard} />
         <Route path="/requests" component={UserDashboard} />

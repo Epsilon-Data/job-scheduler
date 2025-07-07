@@ -108,10 +108,12 @@ export default function WorkspaceDetail({ params }: WorkspaceDetailProps) {
               <p className="mt-2 text-muted-foreground">{workspace.description}</p>
             </div>
             <div className="flex space-x-3">
-              <Button onClick={() => createJobMutation.mutate()} disabled={createJobMutation.isPending}>
-                <Plus className="mr-2 h-4 w-4" />
-                {createJobMutation.isPending ? "Creating..." : "New Job Request"}
-              </Button>
+              <Link href={`/workspaces/${params.id}/jobs/new`}>
+                <Button>
+                  <Plus className="mr-2 h-4 w-4" />
+                  New Job Request
+                </Button>
+              </Link>
               <Button variant="outline">
                 <Settings className="mr-2 h-4 w-4" />
                 Settings
@@ -164,10 +166,12 @@ export default function WorkspaceDetail({ params }: WorkspaceDetailProps) {
             {jobRequests.length === 0 ? (
               <div className="text-center py-8">
                 <p className="text-muted-foreground mb-4">No job requests yet.</p>
-                <Button onClick={() => createJobMutation.mutate()} disabled={createJobMutation.isPending}>
-                  <Plus className="mr-2 h-4 w-4" />
-                  Create First Job Request
-                </Button>
+                <Link href={`/workspaces/${params.id}/jobs/new`}>
+                  <Button>
+                    <Plus className="mr-2 h-4 w-4" />
+                    Create First Job Request
+                  </Button>
+                </Link>
               </div>
             ) : (
               <div className="overflow-x-auto">
