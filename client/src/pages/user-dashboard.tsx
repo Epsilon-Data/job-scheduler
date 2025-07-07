@@ -73,6 +73,7 @@ export default function UserDashboard() {
   console.log("Dashboard render - location:", location);
   console.log("Dashboard render - workspaces:", workspaces.length);
   console.log("Dashboard render - jobRequests:", jobRequests.length);
+  console.log("Dashboard render - jobRequests data:", jobRequests);
 
   return (
     <div className="min-h-screen bg-background">
@@ -210,6 +211,9 @@ export default function UserDashboard() {
               </div>
             </CardHeader>
             <CardContent>
+              <div className="text-xs text-muted-foreground mb-4">
+                Debug: Found {jobRequests.length} job requests, location: {location}
+              </div>
               {jobRequests.length === 0 ? (
                 <div className="text-center py-8">
                   <p className="text-muted-foreground mb-4">No job requests yet.</p>
@@ -226,7 +230,7 @@ export default function UserDashboard() {
                           job.status === "failed" ? "bg-red-500" : "bg-yellow-500"
                         }`}></div>
                         <div>
-                          <p className="font-medium">{job.commitMessage}</p>
+                          <p className="font-medium">{job.commitMessage || "Job Request"}</p>
                           <p className="text-sm text-muted-foreground">
                             {job.commitSha?.substring(0, 7)} • {new Date(job.createdAt).toLocaleDateString()}
                           </p>
