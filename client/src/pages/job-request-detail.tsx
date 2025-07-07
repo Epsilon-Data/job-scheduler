@@ -16,8 +16,8 @@ interface JobRequestDetailProps {
 export default function JobRequestDetail({ params }: JobRequestDetailProps) {
   const { user } = useAuth();
 
-  const { data: jobRequest, isLoading } = useQuery<JobRequest>({
-    queryKey: ["/api/jobs", params.id],
+  const { data: jobRequest, isLoading, error } = useQuery<JobRequest>({
+    queryKey: [`/api/jobs/${params.id}`],
     enabled: user?.approvalStatus === "approved",
   });
 
@@ -32,12 +32,30 @@ export default function JobRequestDetail({ params }: JobRequestDetailProps) {
     );
   }
 
-  if (!jobRequest) {
+  if (error) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <h2 className="text-2xl font-bold text-foreground mb-4">Error loading job request</h2>
+          <p className="text-muted-foreground">Error: {(error as Error).message}</p>
+          <Link href="/dashboard">
+            <Button className="mt-4">Back to Dashboard</Button>
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (!jobRequest && !isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
           <h2 className="text-2xl font-bold text-foreground mb-4">Job request not found</h2>
           <p className="text-muted-foreground">The job request you're looking for doesn't exist or you don't have access to it.</p>
+          <p className="text-xs text-muted-foreground mt-2">Job ID: {params.id}</p>
+          <Link href="/dashboard">
+            <Button className="mt-4">Back to Dashboard</Button>
+          </Link>
         </div>
       </div>
     );
