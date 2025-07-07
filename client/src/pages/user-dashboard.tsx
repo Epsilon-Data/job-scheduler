@@ -10,6 +10,8 @@ import type { Workspace, JobRequest } from "@shared/schema";
 export default function UserDashboard() {
   const { user } = useAuth();
   const [location] = useLocation();
+  
+  console.log("Current location:", location);
 
   const { data: workspaces = [], isLoading } = useQuery<Workspace[]>({
     queryKey: ["/api/workspaces"],
@@ -66,6 +68,11 @@ export default function UserDashboard() {
   const completedJobs = jobRequests.filter(job => job.status === "completed").length;
   const runningJobs = jobRequests.filter(job => job.status === "running").length;
   const queuedJobs = jobRequests.filter(job => job.status === "queued").length;
+
+  // Debug logging
+  console.log("Dashboard render - location:", location);
+  console.log("Dashboard render - workspaces:", workspaces.length);
+  console.log("Dashboard render - jobRequests:", jobRequests.length);
 
   return (
     <div className="min-h-screen bg-background">
