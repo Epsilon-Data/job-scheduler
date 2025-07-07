@@ -14,8 +14,8 @@ export function Header() {
   const isStaff = user.role === "staff";
   const navItems = [
     { href: "/dashboard", label: "Dashboard" },
-    { href: "/workspaces", label: "Workspaces" },
-    { href: "/requests", label: "Job Requests" },
+    { href: "/workspaces", label: "Workspaces" },  
+    { href: "/jobs", label: "Job Requests" },
   ];
 
   if (isStaff) {
@@ -39,7 +39,7 @@ export function Header() {
                 key={item.href}
                 href={item.href}
                 className={`font-medium transition-colors ${
-                  location === item.href
+                  location === item.href || (item.href !== "/dashboard" && location.startsWith(item.href))
                     ? "text-primary"
                     : "text-foreground hover:text-primary"
                 }`}

@@ -42,6 +42,7 @@ function AppContent() {
         <Route path="/workspaces/:id" component={WorkspaceDetail} />
         <Route path="/workspaces/:workspaceId/jobs/new" component={CreateJobRequest} />
         <Route path="/jobs/:id" component={JobRequestDetail} />
+        <Route path="/jobs" component={UserDashboard} />
         <Route path="/staff" component={StaffDashboard} />
         <Route path="/requests" component={UserDashboard} />
         <Route component={NotFound} />
