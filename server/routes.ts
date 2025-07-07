@@ -169,6 +169,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(rejectedUser);
   });
 
+  app.get("/api/staff/workspaces", async (req, res) => {
+    const user = await storage.getUser(req.session.userId || "");
+    if (!user || user.role !== "staff") {
+      return res.status(403).json({ message: "Insufficient permissions" });
+    }
+    
+    const allWorkspaces = await storage.getAllWorkspaces();
+    res.json(allWorkspaces);
+  });
+
   // Workspace routes
   app.get("/api/workspaces", async (req, res) => {
     if (!req.session.userId) {

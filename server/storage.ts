@@ -17,6 +17,7 @@ export interface IStorage {
   // Workspace methods
   getWorkspace(id: string): Promise<Workspace | undefined>;
   getWorkspacesByUserId(userId: string): Promise<Workspace[]>;
+  getAllWorkspaces(): Promise<Workspace[]>;
   createWorkspace(workspace: InsertWorkspace): Promise<Workspace>;
   updateWorkspace(id: string, updates: Partial<Workspace>): Promise<Workspace>;
   deleteWorkspace(id: string): Promise<void>;
@@ -106,6 +107,10 @@ export class DatabaseStorage implements IStorage {
 
   async getWorkspacesByUserId(userId: string): Promise<Workspace[]> {
     return await db.select().from(workspaces).where(eq(workspaces.userId, userId)).orderBy(desc(workspaces.createdAt));
+  }
+
+  async getAllWorkspaces(): Promise<Workspace[]> {
+    return await db.select().from(workspaces).orderBy(desc(workspaces.createdAt));
   }
 
   async createWorkspace(insertWorkspace: InsertWorkspace): Promise<Workspace> {

@@ -32,6 +32,11 @@ export default function StaffDashboard() {
     enabled: user?.role === "staff",
   });
 
+  const { data: allWorkspaces = [] } = useQuery({
+    queryKey: ["/api/staff/workspaces"],
+    enabled: user?.role === "staff",
+  });
+
   const approveMutation = useMutation({
     mutationFn: async (userId: string) => {
       const response = await apiRequest("POST", `/api/staff/users/${userId}/approve`);
@@ -90,7 +95,7 @@ export default function StaffDashboard() {
   const totalUsers = users.length;
   const pendingCount = pendingUsers.length;
   const approvedCount = users.filter(u => u.approvalStatus === "approved").length;
-  const activeWorkspaces = 0; // TODO: Implement workspace count
+  const activeWorkspaces = allWorkspaces.filter((w: any) => w.status === "active").length;
 
   return (
     <div className="min-h-screen bg-background">
