@@ -37,6 +37,11 @@ export default function StaffDashboard() {
     enabled: user?.role === "staff",
   });
 
+  const { data: allJobs = [] } = useQuery({
+    queryKey: ["/api/staff/jobs"],
+    enabled: user?.role === "staff",
+  });
+
   const approveMutation = useMutation({
     mutationFn: async (userId: string) => {
       const response = await apiRequest("POST", `/api/staff/users/${userId}/approve`);
@@ -274,6 +279,84 @@ export default function StaffDashboard() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Job Requests Section */}
+        <div className="mt-8">
+          <h2 className="text-2xl font-bold text-foreground mb-6">All Job Requests</h2>
+          
+          {allJobs.length === 0 ? (
+            <Card>
+              <CardContent className="p-6">
+                <p className="text-muted-foreground text-center">No job requests found.</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              {allJobs.map((job: any) => (
+                <Card key={job.id} className="hover:shadow-md transition-shadow">
+                  <CardContent className="p-6">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3 mb-3">
+                          <h3 className="font-semibold text-foreground">{job.jobId}</h3>
+                          <Badge variant={
+                            job.status === "completed" ? "default" : 
+                            job.status === "running" ? "secondary" : 
+                            job.status === "failed" ? "destructive" : "outline"
+                          }>
+                            {job.status}
+                          </Badge>
+                        </div>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                          <div>
+                            <p className="text-muted-foreground">Repository</p>
+                            <p className="font-medium">{job.githubRepo || "N/A"}</p>
+                          </div>
+                          <div>
+                            <p className="text-muted-foreground">Workspace</p>
+                            <p className="font-medium">{job.workspaceName || "N/A"}</p>
+                          </div>
+                          <div>
+                            <p className="text-muted-foreground">User</p>
+                            <p className="font-medium">{job.username} ({job.fullName})</p>
+                          </div>
+                          <div>
+                            <p className="text-muted-foreground">Commit</p>
+                            <p className="font-medium font-mono text-xs">{job.commitSha?.substring(0, 8) || "N/A"}</p>
+                          </div>
+                        </div>
+                        
+                        {job.commitMessage && (
+                          <div className="mt-3 p-3 bg-muted rounded-md">
+                            <p className="text-sm text-muted-foreground mb-1">Commit Message</p>
+                            <p className="text-sm">{job.commitMessage}</p>
+                          </div>
+                        )}
+                        
+                        <div className="mt-3 flex items-center gap-4 text-xs text-muted-foreground">
+                          <span>Created: {new Date(job.createdAt).toLocaleDateString()}</span>
+                          {job.startedAt && <span>Started: {new Date(job.startedAt).toLocaleDateString()}</span>}
+                          {job.completedAt && <span>Completed: {new Date(job.completedAt).toLocaleDateString()}</span>}
+                        </div>
+                      </div>
+                      
+                      <div className="ml-4">
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          onClick={() => setLocation(`/job/${job.id}`)}
+                        >
+                          View Details
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

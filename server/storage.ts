@@ -26,6 +26,8 @@ export interface IStorage {
   getJobRequest(id: string): Promise<JobRequest | undefined>;
   getJobRequestsByWorkspaceId(workspaceId: string): Promise<JobRequest[]>;
   getJobRequestsByUserId(userId: string): Promise<JobRequest[]>;
+  getAllJobRequests(): Promise<JobRequest[]>;
+  getAllJobRequestsWithDetails(): Promise<any[]>;
   createJobRequest(jobRequest: InsertJobRequest): Promise<JobRequest>;
   updateJobRequest(id: string, updates: Partial<JobRequest>): Promise<JobRequest>;
   deleteJobRequest(id: string): Promise<void>;
@@ -146,6 +148,40 @@ export class DatabaseStorage implements IStorage {
 
   async getJobRequestsByUserId(userId: string): Promise<JobRequest[]> {
     return await db.select().from(jobRequests).where(eq(jobRequests.userId, userId)).orderBy(desc(jobRequests.createdAt));
+  }
+
+  async getAllJobRequests(): Promise<JobRequest[]> {
+    return await db.select().from(jobRequests).orderBy(desc(jobRequests.createdAt));
+  }
+
+  async getAllJobRequestsWithDetails(): Promise<any[]> {
+    return await db
+      .select({
+        id: jobRequests.id,
+        jobId: jobRequests.jobId,
+        workspaceId: jobRequests.workspaceId,
+        userId: jobRequests.userId,
+        commitSha: jobRequests.commitSha,
+        commitMessage: jobRequests.commitMessage,
+        commitAuthor: jobRequests.commitAuthor,
+        commitDate: jobRequests.commitDate,
+        status: jobRequests.status,
+        startedAt: jobRequests.startedAt,
+        completedAt: jobRequests.completedAt,
+        durationSeconds: jobRequests.durationSeconds,
+        exitCode: jobRequests.exitCode,
+        errorMessage: jobRequests.errorMessage,
+        createdAt: jobRequests.createdAt,
+        updatedAt: jobRequests.updatedAt,
+        username: users.username,
+        fullName: users.fullName,
+        workspaceName: workspaces.name,
+        githubRepo: workspaces.githubRepo,
+      })
+      .from(jobRequests)
+      .innerJoin(users, eq(jobRequests.userId, users.id))
+      .innerJoin(workspaces, eq(jobRequests.workspaceId, workspaces.id))
+      .orderBy(desc(jobRequests.createdAt));
   }
 
   async createJobRequest(insertJobRequest: InsertJobRequest): Promise<JobRequest> {
