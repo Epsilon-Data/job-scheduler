@@ -8,6 +8,15 @@ import { useToast } from "@/hooks/use-toast";
 import { Plus, Settings, Github, GitBranch, GitCommit, Eye, Download, X } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import type { Workspace, JobRequest } from "@shared/schema";
+import { useState } from "react";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 
 interface WorkspaceDetailProps {
   params: {
@@ -20,6 +29,8 @@ export default function WorkspaceDetail({ params }: WorkspaceDetailProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
 
   const { data: workspace, isLoading } = useQuery<Workspace>({
     queryKey: [`/api/workspaces/${params.id}`],
@@ -185,32 +196,35 @@ export default function WorkspaceDetail({ params }: WorkspaceDetailProps) {
                 </Link>
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b border-border">
-                      <th className="text-left py-3 px-6 text-sm font-medium text-muted-foreground">
-                        Job ID
-                      </th>
-                      <th className="text-left py-3 px-6 text-sm font-medium text-muted-foreground">
-                        Commit
-                      </th>
-                      <th className="text-left py-3 px-6 text-sm font-medium text-muted-foreground">
-                        Submitted
-                      </th>
-                      <th className="text-left py-3 px-6 text-sm font-medium text-muted-foreground">
-                        Duration
-                      </th>
-                      <th className="text-left py-3 px-6 text-sm font-medium text-muted-foreground">
-                        Status
-                      </th>
-                      <th className="text-left py-3 px-6 text-sm font-medium text-muted-foreground">
-                        Actions
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {jobRequests.map((job) => (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-border">
+                        <th className="text-left py-3 px-6 text-sm font-medium text-muted-foreground">
+                          Job ID
+                        </th>
+                        <th className="text-left py-3 px-6 text-sm font-medium text-muted-foreground">
+                          Commit
+                        </th>
+                        <th className="text-left py-3 px-6 text-sm font-medium text-muted-foreground">
+                          Submitted
+                        </th>
+                        <th className="text-left py-3 px-6 text-sm font-medium text-muted-foreground">
+                          Duration
+                        </th>
+                        <th className="text-left py-3 px-6 text-sm font-medium text-muted-foreground">
+                          Status
+                        </th>
+                        <th className="text-left py-3 px-6 text-sm font-medium text-muted-foreground">
+                          Actions
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {jobRequests
+                        .slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
+                        .map((job) => (
                       <tr key={job.id} className="border-b border-border hover:bg-muted/50">
                         <td className="py-4 px-6">
                           <div className="text-sm font-medium text-foreground">{job.jobId}</div>
@@ -263,6 +277,41 @@ export default function WorkspaceDetail({ params }: WorkspaceDetailProps) {
                   </tbody>
                 </table>
               </div>
+              
+              {jobRequests.length > itemsPerPage && (
+                <div className="mt-4 flex justify-center">
+                  <Pagination>
+                    <PaginationContent>
+                      <PaginationItem>
+                        <PaginationPrevious 
+                          onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                          className={currentPage === 1 ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                        />
+                      </PaginationItem>
+                      
+                      {Array.from({ length: Math.ceil(jobRequests.length / itemsPerPage) }, (_, i) => i + 1).map((page) => (
+                        <PaginationItem key={page}>
+                          <PaginationLink
+                            onClick={() => setCurrentPage(page)}
+                            isActive={currentPage === page}
+                            className="cursor-pointer"
+                          >
+                            {page}
+                          </PaginationLink>
+                        </PaginationItem>
+                      ))}
+                      
+                      <PaginationItem>
+                        <PaginationNext 
+                          onClick={() => setCurrentPage(prev => Math.min(Math.ceil(jobRequests.length / itemsPerPage), prev + 1))}
+                          className={currentPage === Math.ceil(jobRequests.length / itemsPerPage) ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                        />
+                      </PaginationItem>
+                    </PaginationContent>
+                  </Pagination>
+                </div>
+              )}
+              </>
             )}
           </CardContent>
         </Card>

@@ -3,6 +3,20 @@ import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
+// Job status enum with AI agent workflow
+export enum JobStatus {
+  PENDING = "pending",
+  AI_ANALYZING = "ai_analyzing",
+  AI_APPROVED = "ai_approved", 
+  AI_REJECTED = "ai_rejected",
+  RUNNING = "running", 
+  COMPLETED = "completed",
+  FAILED = "failed",
+  VALIDATING = "validating",
+  VALIDATED = "validated",
+  REJECTED = "rejected"
+}
+
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
   githubId: varchar("github_id", { length: 255 }).unique().notNull(),
@@ -54,6 +68,15 @@ export const jobRequests = pgTable("job_requests", {
   errorMessage: text("error_message"),
   logs: text("logs"),
   outputFiles: jsonb("output_files"),
+  // Additional fields from job-server
+  resultMetadata: text("result_metadata"),
+  executionOutput: text("execution_output"),
+  executionError: text("execution_error"),  
+  executionMethod: varchar("execution_method", { length: 100 }),
+  validationStatus: varchar("validation_status", { length: 50 }),
+  validationPolicy: text("validation_policy"),
+  validationDecision: text("validation_decision"),
+  aiLogs: text("ai_logs"), // Store AI analysis logs
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -109,6 +132,27 @@ export const insertJobRequestSchema = createInsertSchema(jobRequests).omit({
   errorMessage: true,
   logs: true,
   outputFiles: true,
+  resultMetadata: true,
+  executionOutput: true,
+  executionError: true,
+  executionMethod: true,
+  validationStatus: true,
+  validationPolicy: true,
+  validationDecision: true,
+});
+
+export const jobUpdateSchema = z.object({
+  status: z.nativeEnum(JobStatus),
+  resultMetadata: z.string().optional(),
+  errorMessage: z.string().optional(),
+  executionOutput: z.string().optional(),
+  executionError: z.string().optional(),
+  executionMethod: z.string().optional(),
+  exitCode: z.number().optional(),
+  validationStatus: z.string().optional(),
+  validationPolicy: z.string().optional(),
+  validationDecision: z.string().optional(),
+  aiLogs: z.string().optional(), // AI analysis logs
 });
 
 export const approvalRequestSchema = z.object({
@@ -123,4 +167,5 @@ export type Workspace = typeof workspaces.$inferSelect;
 export type InsertWorkspace = z.infer<typeof insertWorkspaceSchema>;
 export type JobRequest = typeof jobRequests.$inferSelect;
 export type InsertJobRequest = z.infer<typeof insertJobRequestSchema>;
+export type JobUpdate = z.infer<typeof jobUpdateSchema>;
 export type ApprovalRequest = z.infer<typeof approvalRequestSchema>;

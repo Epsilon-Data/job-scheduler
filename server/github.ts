@@ -1,3 +1,5 @@
+import * as process from "node:process";
+
 interface GitHubUser {
   id: number;
   login: string;
@@ -46,7 +48,7 @@ export const githubApi = {
       throw new Error("GitHub OAuth not configured");
     }
     
-    const redirectUri = `https://${req.get('host')}/api/auth/github/callback`;
+    const redirectUri = process.env.GITHUB_REDIRECT_URI;
     
     // Exchange code for access token
     const tokenResponse = await fetch("https://github.com/login/oauth/access_token", {

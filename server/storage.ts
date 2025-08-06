@@ -1,4 +1,4 @@
-import { users, workspaces, jobRequests, type User, type InsertUser, type Workspace, type InsertWorkspace, type JobRequest, type InsertJobRequest } from "@shared/schema";
+import { users, workspaces, jobRequests, type User, type InsertUser, type Workspace, type InsertWorkspace, type JobRequest, type InsertJobRequest, type JobUpdate, JobStatus } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and } from "drizzle-orm";
 
@@ -24,12 +24,14 @@ export interface IStorage {
 
   // Job Request methods
   getJobRequest(id: string): Promise<JobRequest | undefined>;
+  getJobRequestByJobId(jobId: string): Promise<JobRequest | undefined>;
   getJobRequestsByWorkspaceId(workspaceId: string): Promise<JobRequest[]>;
   getJobRequestsByUserId(userId: string): Promise<JobRequest[]>;
   getAllJobRequests(): Promise<JobRequest[]>;
   getAllJobRequestsWithDetails(): Promise<any[]>;
   createJobRequest(jobRequest: InsertJobRequest): Promise<JobRequest>;
   updateJobRequest(id: string, updates: Partial<JobRequest>): Promise<JobRequest>;
+  updateJobStatus(jobId: string, statusUpdate: JobUpdate): Promise<JobRequest>;
   deleteJobRequest(id: string): Promise<void>;
 }
 
@@ -142,6 +144,11 @@ export class DatabaseStorage implements IStorage {
     return jobRequest || undefined;
   }
 
+  async getJobRequestByJobId(jobId: string): Promise<JobRequest | undefined> {
+    const [jobRequest] = await db.select().from(jobRequests).where(eq(jobRequests.jobId, jobId));
+    return jobRequest || undefined;
+  }
+
   async getJobRequestsByWorkspaceId(workspaceId: string): Promise<JobRequest[]> {
     return await db.select().from(jobRequests).where(eq(jobRequests.workspaceId, workspaceId)).orderBy(desc(jobRequests.createdAt));
   }
@@ -177,6 +184,7 @@ export class DatabaseStorage implements IStorage {
         fullName: users.fullName,
         workspaceName: workspaces.name,
         githubRepo: workspaces.githubRepo,
+        githubBranch: workspaces.githubBranch,
       })
       .from(jobRequests)
       .innerJoin(users, eq(jobRequests.userId, users.id))
@@ -198,6 +206,57 @@ export class DatabaseStorage implements IStorage {
       .update(jobRequests)
       .set({ ...updates, updatedAt: new Date() })
       .where(eq(jobRequests.id, id))
+      .returning();
+    return jobRequest;
+  }
+
+  async updateJobStatus(jobId: string, statusUpdate: JobUpdate): Promise<JobRequest> {
+    const updateData: any = { 
+      status: statusUpdate.status, 
+      updatedAt: new Date() 
+    };
+    
+    // Add optional fields if provided
+    if (statusUpdate.resultMetadata) updateData.resultMetadata = statusUpdate.resultMetadata;
+    if (statusUpdate.errorMessage) updateData.errorMessage = statusUpdate.errorMessage;
+    if (statusUpdate.executionOutput) updateData.executionOutput = statusUpdate.executionOutput;
+    if (statusUpdate.executionError) updateData.executionError = statusUpdate.executionError;
+    if (statusUpdate.executionMethod) updateData.executionMethod = statusUpdate.executionMethod;
+    if (statusUpdate.exitCode !== undefined) updateData.exitCode = statusUpdate.exitCode;
+    if (statusUpdate.validationStatus) updateData.validationStatus = statusUpdate.validationStatus;
+    if (statusUpdate.validationPolicy) updateData.validationPolicy = statusUpdate.validationPolicy;
+    if (statusUpdate.validationDecision) updateData.validationDecision = statusUpdate.validationDecision;
+    if (statusUpdate.aiLogs) updateData.aiLogs = statusUpdate.aiLogs;
+    
+    // Get current job data to calculate duration
+    const currentJob = await db
+      .select()
+      .from(jobRequests)
+      .where(eq(jobRequests.jobId, jobId))
+      .limit(1);
+    
+    if (currentJob.length === 0) {
+      throw new Error(`Job not found: ${jobId}`);
+    }
+    
+    const job = currentJob[0];
+    
+    // Update timestamps based on status  
+    if (statusUpdate.status === JobStatus.RUNNING) {
+      updateData.startedAt = new Date();
+    } else if ([JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.VALIDATED, JobStatus.REJECTED].includes(statusUpdate.status)) {
+      updateData.completedAt = new Date();
+      // Calculate duration from stored startedAt or createdAt if startedAt is null
+      const startTime = job.startedAt || job.createdAt;
+      if (startTime) {
+        updateData.durationSeconds = Math.floor((updateData.completedAt.getTime() - startTime.getTime()) / 1000);
+      }
+    }
+
+    const [jobRequest] = await db
+      .update(jobRequests)
+      .set(updateData)
+      .where(eq(jobRequests.jobId, jobId))
       .returning();
     return jobRequest;
   }

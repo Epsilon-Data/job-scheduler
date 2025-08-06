@@ -72,7 +72,7 @@ export default function CreateJobRequest({ params }: CreateJobRequestProps) {
         title: "Job request created",
         description: `Job request has been submitted successfully.`,
       });
-      queryClient.invalidateQueries({ queryKey: ["/api/workspaces", params.workspaceId, "jobs"] });
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${params.workspaceId}/jobs`] });
       queryClient.invalidateQueries({ queryKey: ["/api/user/jobs"] });
       setLocation(`/workspaces/${params.workspaceId}`);
     },
@@ -349,6 +349,12 @@ export default function CreateJobRequest({ params }: CreateJobRequestProps) {
                 </h4>
                 <ul className="text-sm text-blue-700 dark:text-blue-300 space-y-1">
                   <li>• The latest commit ({latestCommit?.sha?.substring(0, 7) || "unknown"}) will be used</li>
+                  {latestCommit && (
+                    <>
+                      <li>• Commit message: "{latestCommit.message}"</li>
+                      <li>• Author: {latestCommit.author} on {new Date(latestCommit.date).toLocaleDateString()}</li>
+                    </>
+                  )}
                   <li>• Your job will be queued for execution</li>
                   <li>• You'll receive notifications when the job starts and completes</li>
                   <li>• Results will be available for download once completed</li>

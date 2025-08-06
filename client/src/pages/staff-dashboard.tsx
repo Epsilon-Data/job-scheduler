@@ -345,7 +345,7 @@ export default function StaffDashboard() {
                         <Button 
                           variant="outline" 
                           size="sm"
-                          onClick={() => setLocation(`/job/${job.id}`)}
+                          onClick={() => setLocation(`/jobs/${job.id}`)}
                         >
                           View Details
                         </Button>

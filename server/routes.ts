@@ -1,10 +1,11 @@
 import type { Express, Request } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertUserSchema, insertWorkspaceSchema, insertJobRequestSchema, approvalRequestSchema } from "@shared/schema";
+import { insertUserSchema, insertWorkspaceSchema, insertJobRequestSchema, approvalRequestSchema, jobUpdateSchema, JobStatus } from "@shared/schema";
 import { z } from "zod";
 import { fromZodError } from "zod-validation-error";
 import { githubApi } from "./github";
+import * as process from "node:process";
 
 // Extend Express Request type to include session
 declare module "express-serve-static-core" {
@@ -26,7 +27,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(500).json({ message: "GitHub OAuth not configured" });
     }
     
-    const redirectUri = `https://${req.get('host')}/api/auth/github/callback`;
+    const redirectUri = process.env.GITHUB_REDIRECT_URI;
     const scope = "user:email,read:user,repo";
     const state = Math.random().toString(36).substring(2, 15);
     
@@ -93,16 +94,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error("GitHub OAuth error:", error);
       res.redirect("/auth?error=oauth_failed");
     }
-  });
-
-  // Add a test endpoint to check session state
-  app.get("/api/debug/session", (req, res) => {
-    res.json({
-      hasSession: !!req.session,
-      sessionId: req.session?.id,
-      oauthState: req.session?.oauthState,
-      userId: req.session?.userId,
-    });
   });
 
   app.post("/api/auth/logout", (req, res) => {
@@ -269,14 +260,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...req.body,
         userId: req.session.userId,
       });
-      
-      // Get latest commit info from GitHub
-      const commitInfo = await githubApi.getLatestCommit(
-        validatedData.githubRepo,
-        validatedData.githubBranch,
-        req.session.accessToken!
-      );
-      
+
       const workspace = await storage.createWorkspace({
         ...validatedData,
         userId: req.session.userId!,
@@ -300,6 +284,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const jobRequests = await storage.getJobRequestsByUserId(req.session.userId);
     res.json(jobRequests);
   });
+
   app.get("/api/workspaces/:id/jobs", async (req, res) => {
     if (!req.session.userId) {
       return res.status(401).json({ message: "Not authenticated" });
@@ -359,6 +344,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         commitDate: commitInfo.date,
         status: "queued",
       });
+
+      // Job will be picked up by job-runner polling the /jobs endpoint
+      console.log(`Job ${jobRequest.jobId} created and ready for job-runner to pick up`);
+      
+      // Update to pending status for job-runner to pick up
+      await storage.updateJobRequest(jobRequest.id, {
+        status: "pending",
+        executionMethod: "job-runner",
+      });
       
       res.json(jobRequest);
     } catch (error) {
@@ -369,7 +363,251 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // GitHub API routes
+  // Job-server compatible API routes
+  // Create job (POST /jobs) - compatible with job-server API
+  app.post("/api/jobs", async (req, res) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    
+    try {
+      const { github_repo, branch_name } = req.body;
+      
+      if (!github_repo || !branch_name) {
+        return res.status(400).json({ message: "github_repo and branch_name are required" });
+      }
+      
+      // Find or create workspace for this repo
+      const userWorkspaces = await storage.getWorkspacesByUserId(req.session.userId);
+      let workspace = userWorkspaces.find(w => w.githubRepo === github_repo && w.githubBranch === branch_name);
+      
+      if (!workspace) {
+        // Create workspace if it doesn't exist
+        workspace = await storage.createWorkspace({
+          name: `${github_repo} (${branch_name})`,
+          description: `Auto-created workspace for ${github_repo}`,
+          userId: req.session.userId!,
+          githubRepo: github_repo,
+          githubBranch: branch_name,
+          status: "active"
+        });
+      }
+      
+      // Get commit info
+      const commitInfo = await githubApi.getLatestCommit(
+        github_repo,
+        branch_name,
+        req.session.accessToken!
+      );
+      
+      const jobRequest = await storage.createJobRequest({
+        workspaceId: workspace.id,
+        userId: req.session.userId!,
+        commitSha: commitInfo.sha,
+        commitMessage: commitInfo.message,
+        commitAuthor: commitInfo.author,
+        commitDate: commitInfo.date,
+        status: "queued",
+      });
+
+      // Job will be picked up by job-runner polling the /jobs endpoint
+      console.log(`Job ${jobRequest.jobId} created and ready for job-runner to pick up`);
+      
+      // Update to pending status for job-runner to pick up
+      await storage.updateJobRequest(jobRequest.id, {
+        status: "pending",
+        executionMethod: "job-runner",
+      });
+      
+      res.json({
+        id: jobRequest.jobId,
+        github_repo: workspace.githubRepo,
+        branch_name: workspace.githubBranch,
+        status: jobRequest.status,
+        created_at: jobRequest.createdAt,
+        updated_at: jobRequest.updatedAt
+      });
+    } catch (error) {
+      console.error("Job creation error:", error);
+      res.status(500).json({ message: "Failed to create job" });
+    }
+  });
+
+  // Get job by ID (GET /jobs/{job_id}) - compatible with job-server API
+  app.get("/api/jobs/:jobId", async (req, res) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    
+    try {
+      const jobRequest = await storage.getJobRequestByJobId(req.params.jobId);
+      if (!jobRequest) {
+        return res.status(404).json({ message: "Job not found" });
+      }
+      
+      // Check if user owns job request
+      if (jobRequest.userId !== req.session.userId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      
+      const workspace = await storage.getWorkspace(jobRequest.workspaceId);
+      
+      res.json({
+        id: jobRequest.jobId,
+        github_repo: workspace?.githubRepo,
+        branch_name: workspace?.githubBranch,
+        status: jobRequest.status,
+        created_at: jobRequest.createdAt,
+        updated_at: jobRequest.updatedAt,
+        started_at: jobRequest.startedAt,
+        completed_at: jobRequest.completedAt,
+        duration_seconds: jobRequest.durationSeconds,
+        exit_code: jobRequest.exitCode,
+        result_metadata: jobRequest.resultMetadata,
+        error_message: jobRequest.errorMessage,
+        execution_output: jobRequest.executionOutput,
+        execution_error: jobRequest.executionError,
+        commit_hash: jobRequest.commitSha,
+        commit_message: jobRequest.commitMessage,
+        commit_time: jobRequest.commitDate,
+        execution_method: jobRequest.executionMethod,
+        validation_status: jobRequest.validationStatus,
+        validation_policy: jobRequest.validationPolicy,
+        validation_decision: jobRequest.validationDecision
+      });
+    } catch (error) {
+      console.error("Get job error:", error);
+      res.status(500).json({ message: "Failed to get job" });
+    }
+  });
+
+  // List all jobs (GET /jobs) - compatible with job-server API
+  app.get("/api/jobs", async (req, res) => {  
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    
+    try {
+      const jobRequests = await storage.getJobRequestsByUserId(req.session.userId);
+      const jobsWithWorkspace = await Promise.all(
+        jobRequests.map(async (job) => {
+          const workspace = await storage.getWorkspace(job.workspaceId);
+          return {
+            id: job.jobId,
+            github_repo: workspace?.githubRepo,
+            branch_name: workspace?.githubBranch,
+            status: job.status,
+            created_at: job.createdAt,
+            updated_at: job.updatedAt,
+            started_at: job.startedAt,
+            completed_at: job.completedAt,
+            duration_seconds: job.durationSeconds,
+            exit_code: job.exitCode,
+            result_metadata: job.resultMetadata,
+            error_message: job.errorMessage,
+            execution_output: job.executionOutput,
+            execution_error: job.executionError,
+            commit_hash: job.commitSha,
+            commit_message: job.commitMessage,
+            commit_time: job.commitDate,
+            execution_method: job.executionMethod,
+            validation_status: job.validationStatus,
+            validation_policy: job.validationPolicy,
+            validation_decision: job.validationDecision
+          };
+        })
+      );
+      
+      res.json(jobsWithWorkspace);
+    } catch (error) {
+      console.error("List jobs error:", error);
+      res.status(500).json({ message: "Failed to list jobs" });
+    }
+  });
+
+  // Update job status (PUT /jobs/{job_id}/status) - compatible with job-server API
+  app.put("/api/jobs/:jobId/status", async (req, res) => {
+    try {
+      const validatedData = jobUpdateSchema.parse(req.body);
+      const updatedJob = await storage.updateJobStatus(req.params.jobId, validatedData);
+      
+      res.json({ message: "Job status updated successfully" });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: fromZodError(error).toString() });
+      }
+      console.error("Update job status error:", error);
+      res.status(500).json({ message: "Failed to update job status" });
+    }
+  });
+
+  // Legacy job-server API routes (for job-runner compatibility)
+  // Get all jobs without /api prefix (job-runner expects /jobs not /api/jobs)
+  app.get("/api/runner/jobs", async (req, res) => {
+    try {
+      // Get all job requests from all users for job-runner
+      const allJobs = await storage.getAllJobRequestsWithDetails();
+      
+      // Transform to job-runner expected format
+      const jobsForRunner = allJobs.map(job => ({
+        id: job.jobId,
+        status: job.status,
+        github_repo: job.githubRepo ? `https://github.com/${job.githubRepo}` : '',
+        branch_name: job.githubBranch || '',
+        workspace: 'default',
+        language: 'python',
+        created_at: job.createdAt,
+        updated_at: job.updatedAt
+      }));
+      
+      res.json(jobsForRunner);
+    } catch (error) {
+      console.error("Get jobs for runner error:", error);
+      res.status(500).json({ message: "Failed to get jobs" });
+    }
+  });
+
+  // Update job status without /api prefix (job-runner expects /jobs/{id}/status not /api/jobs/{id}/status)
+  app.put("/api/runner/jobs/:jobId/status", async (req, res) => {
+    try {
+      console.log(`Job-runner status update for ${req.params.jobId}:`, JSON.stringify(req.body, null, 2));
+      
+      // Transform job-runner field names (snake_case) to our schema (camelCase)
+      const transformedData = {
+        status: req.body.status,
+        resultMetadata: req.body.result_metadata ? JSON.stringify(req.body.result_metadata) : req.body.resultMetadata,
+        errorMessage: req.body.error_message || req.body.errorMessage,
+        executionOutput: req.body.execution_output || req.body.executionOutput,
+        executionError: req.body.execution_error || req.body.executionError,
+        executionMethod: req.body.execution_method || req.body.executionMethod,
+        exitCode: req.body.exit_code !== undefined ? req.body.exit_code : req.body.exitCode,
+        validationStatus: req.body.validation_status || req.body.validationStatus,
+        validationPolicy: req.body.validation_policy || req.body.validationPolicy,
+        validationDecision: req.body.validation_decision || req.body.validationDecision,
+        aiLogs: req.body.ai_logs || req.body.aiLogs,
+      };
+      
+      // Remove undefined fields
+      Object.keys(transformedData).forEach(key => {
+        if (transformedData[key] === undefined) {
+          delete transformedData[key];
+        }
+      });
+      
+      const validatedData = jobUpdateSchema.parse(transformedData);
+      const updatedJob = await storage.updateJobStatus(req.params.jobId, validatedData);
+      
+      res.json({ message: "Job status updated successfully" });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: fromZodError(error).toString() });
+      }
+      console.error("Update job status error:", error);
+      res.status(500).json({ message: "Failed to update job status" });
+    }
+  });
+
+  // GitHub API routes  
   app.get("/api/github/repos", async (req, res) => {
     if (!req.session.userId || !req.session.accessToken) {
       return res.status(401).json({ message: "Not authenticated" });
