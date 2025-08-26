@@ -165,7 +165,43 @@ export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type Workspace = typeof workspaces.$inferSelect;
 export type InsertWorkspace = z.infer<typeof insertWorkspaceSchema>;
-export type JobRequest = typeof jobRequests.$inferSelect;
+export type JobRequest = typeof jobRequests.$inferSelect & {
+  // Additional fields added by API responses
+  detailed_logs?: Array<{
+    id: string;
+    job_id: string;
+    worker_name: string;
+    step_name: string;
+    step_type: string;
+    level: string;
+    message: string;
+    metadata?: any;
+    progress?: number;
+    duration_ms?: number;
+    error_details?: any;
+    parent_log_id?: string;
+    created_at: string;
+  }>;
+  logs_summary?: Array<any>;
+  latest_logs?: Array<any>;
+  ai_logs?: string;
+  code_violations?: Array<{
+    file: string;
+    line: number;
+    field: string;
+    code: string;
+    type: string;
+  }>;
+  // Job-server compatible fields
+  duration_seconds?: number;
+  completed_at?: string;
+  started_at?: string;
+  github_repo?: string;
+  branch_name?: string;
+  commit_hash?: string;
+  commit_time?: string;
+  result_metadata?: any;
+};
 export type InsertJobRequest = z.infer<typeof insertJobRequestSchema>;
 export type JobUpdate = z.infer<typeof jobUpdateSchema>;
 export type ApprovalRequest = z.infer<typeof approvalRequestSchema>;

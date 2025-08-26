@@ -304,7 +304,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(401).json({ message: "Not authenticated" });
     }
     
-    const jobRequest = await storage.getJobRequest(req.params.id);
+    // Check if it's a job ID (JOB-XXXXX format) or database UUID
+    const isJobId = req.params.id.startsWith('JOB-');
+    const jobRequest = isJobId 
+      ? await storage.getJobRequestByJobId(req.params.id)
+      : await storage.getJobRequest(req.params.id);
+      
     if (!jobRequest) {
       return res.status(404).json({ message: "Job request not found" });
     }
@@ -314,7 +319,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(403).json({ message: "Access denied" });
     }
     
-    res.json(jobRequest);
+    // Get job logs from the new job_logs table
+    let detailedLogs, logsSummary, latestLogs;
+    try {
+      detailedLogs = await storage.getJobLogs(jobRequest.jobId);
+      logsSummary = await storage.getJobLogsSummary(jobRequest.jobId);
+      latestLogs = await storage.getLatestJobLogs(jobRequest.jobId);
+      console.log(`Job ${jobRequest.jobId} logs:`, {
+        detailedLogsCount: detailedLogs?.length || 0,
+        logsSummaryCount: logsSummary?.length || 0,
+        latestLogsCount: latestLogs?.length || 0
+      });
+    } catch (error) {
+      console.log(`Warning: Could not fetch job logs for ${jobRequest.jobId}:`, error.message);
+      detailedLogs = [];
+      logsSummary = [];
+      latestLogs = [];
+    }
+    
+    // Enhanced response with detailed logs and code violations
+    res.json({
+      ...jobRequest,
+      detailed_logs: detailedLogs,
+      code_violations: latestLogs?.find(log => log.worker_name === 'AIAgentWorker' && log.metadata?.pii_details)?.metadata?.pii_details || null
+    });
   });
 
   app.post("/api/workspaces/:id/jobs", async (req, res) => {
@@ -452,6 +480,69 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const workspace = await storage.getWorkspace(jobRequest.workspaceId);
       
+      // Get job logs from the new job_logs table
+      let detailedLogs, logsSummary, latestLogs;
+      try {
+        detailedLogs = await storage.getJobLogs(jobRequest.jobId);
+        logsSummary = await storage.getJobLogsSummary(jobRequest.jobId);
+        latestLogs = await storage.getLatestJobLogs(jobRequest.jobId);
+        console.log(`Job ${jobRequest.jobId} logs:`, {
+          detailedLogsCount: detailedLogs?.length || 0,
+          logsSummaryCount: logsSummary?.length || 0,
+          latestLogsCount: latestLogs?.length || 0
+        });
+      } catch (error) {
+        console.log(`Warning: Could not fetch job logs for ${jobRequest.jobId}:`, error.message);
+        detailedLogs = [];
+        logsSummary = [];
+        latestLogs = [];
+      }
+      
+      // Calculate actual duration from logs or fallback to basic calculation
+      let calculatedDuration = jobRequest.durationSeconds;
+      let calculatedCompletedAt = jobRequest.completedAt;
+      
+      console.log(`Job ${jobRequest.jobId} initial values:`, {
+        status: jobRequest.status,
+        durationSeconds: jobRequest.durationSeconds,
+        completedAt: jobRequest.completedAt,
+        startedAt: jobRequest.startedAt,
+        createdAt: jobRequest.createdAt,
+        updatedAt: jobRequest.updatedAt
+      });
+      
+      // Try to get duration from logs if available
+      if (logsSummary && logsSummary.length > 0) {
+        const firstLog = logsSummary.reduce((earliest, log) => 
+          new Date(log.step_started_at) < new Date(earliest.step_started_at) ? log : earliest
+        );
+        const lastLog = logsSummary.reduce((latest, log) => 
+          new Date(log.step_completed_at || log.step_started_at) > new Date(latest.step_completed_at || latest.step_started_at) ? log : latest
+        );
+        
+        if (firstLog && lastLog && lastLog.step_completed_at) {
+          const startTime = new Date(firstLog.step_started_at);
+          const endTime = new Date(lastLog.step_completed_at);
+          calculatedDuration = Math.round((endTime.getTime() - startTime.getTime()) / 1000);
+          calculatedCompletedAt = lastLog.step_completed_at;
+        }
+      }
+      
+      // Fallback: If no calculated duration and job is completed, calculate from basic timestamps
+      if (!calculatedDuration && jobRequest.status === 'completed') {
+        const startTime = jobRequest.startedAt || jobRequest.createdAt;
+        const endTime = jobRequest.completedAt || jobRequest.updatedAt;
+        if (startTime && endTime) {
+          calculatedDuration = Math.round((new Date(endTime).getTime() - new Date(startTime).getTime()) / 1000);
+          calculatedCompletedAt = calculatedCompletedAt || endTime;
+        }
+      }
+      
+      // Final fallback: For completed jobs, use updatedAt as completion time
+      if (!calculatedCompletedAt && jobRequest.status === 'completed' && jobRequest.updatedAt) {
+        calculatedCompletedAt = jobRequest.updatedAt;
+      }
+
       res.json({
         id: jobRequest.jobId,
         github_repo: workspace?.githubRepo,
@@ -460,8 +551,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         created_at: jobRequest.createdAt,
         updated_at: jobRequest.updatedAt,
         started_at: jobRequest.startedAt,
-        completed_at: jobRequest.completedAt,
-        duration_seconds: jobRequest.durationSeconds,
+        completed_at: calculatedCompletedAt,
+        duration_seconds: calculatedDuration,
         exit_code: jobRequest.exitCode,
         result_metadata: jobRequest.resultMetadata,
         error_message: jobRequest.errorMessage,
@@ -473,7 +564,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         execution_method: jobRequest.executionMethod,
         validation_status: jobRequest.validationStatus,
         validation_policy: jobRequest.validationPolicy,
-        validation_decision: jobRequest.validationDecision
+        validation_decision: jobRequest.validationDecision,
+        // New detailed logs data
+        detailed_logs: detailedLogs,
+        logs_summary: logsSummary,
+        latest_logs: latestLogs,
+        ai_logs: detailedLogs?.filter(log => log.worker_name === 'AIAgentWorker').map(log => 
+          `[${new Date(log.created_at).toLocaleString()}] ${log.level.toUpperCase()}: ${log.message}${log.metadata ? ' | ' + JSON.stringify(log.metadata) : ''}`
+        ).join('\n') || jobRequest.aiLogs,
+        // Include code violation details if available from latest logs
+        code_violations: latestLogs?.find(log => log.worker_name === 'AIAgentWorker' && log.metadata?.pii_details)?.metadata?.pii_details || null
       });
     } catch (error) {
       console.error("Get job error:", error);
@@ -538,6 +638,77 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       console.error("Update job status error:", error);
       res.status(500).json({ message: "Failed to update job status" });
+    }
+  });
+
+  // Epsilon-coordinator result file endpoints
+  app.get("/api/jobs/:jobId/execution-result", async (req, res) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    
+    try {
+      const jobRequest = await storage.getJobRequestByJobId(req.params.jobId);
+      if (!jobRequest) {
+        return res.status(404).json({ message: "Job not found" });
+      }
+      
+      // Check if user owns job request
+      if (jobRequest.userId !== req.session.userId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      
+      // Fetch result from epsilon-coordinator API
+      const coordinatorApiUrl = process.env.EPSILON_COORDINATOR_API_URL || 'http://localhost:8001';
+      const response = await fetch(`${coordinatorApiUrl}/api/jobs/${req.params.jobId}/execution-result`);
+      
+      if (!response.ok) {
+        return res.status(404).json({ 
+          message: "Execution result not found",
+          details: `Coordinator API returned ${response.status}`
+        });
+      }
+      
+      const resultData = await response.json();
+      res.json(resultData);
+    } catch (error) {
+      console.error("Get execution result error:", error);
+      res.status(500).json({ message: "Failed to get execution result" });
+    }
+  });
+
+  app.get("/api/jobs/:jobId/ai-analysis-result", async (req, res) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    
+    try {
+      const jobRequest = await storage.getJobRequestByJobId(req.params.jobId);
+      if (!jobRequest) {
+        return res.status(404).json({ message: "Job not found" });
+      }
+      
+      // Check if user owns job request
+      if (jobRequest.userId !== req.session.userId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      
+      // Fetch AI analysis result from epsilon-coordinator API
+      const coordinatorApiUrl = process.env.EPSILON_COORDINATOR_API_URL || 'http://localhost:8001';
+      const response = await fetch(`${coordinatorApiUrl}/api/jobs/${req.params.jobId}/ai-analysis-result`);
+      
+      if (!response.ok) {
+        return res.status(404).json({ 
+          message: "AI analysis result not found",
+          details: `Coordinator API returned ${response.status}`
+        });
+      }
+      
+      const resultData = await response.json();
+      res.json(resultData);
+    } catch (error) {
+      console.error("Get AI analysis result error:", error);
+      res.status(500).json({ message: "Failed to get AI analysis result" });
     }
   });
 

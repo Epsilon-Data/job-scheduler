@@ -33,6 +33,11 @@ export interface IStorage {
   updateJobRequest(id: string, updates: Partial<JobRequest>): Promise<JobRequest>;
   updateJobStatus(jobId: string, statusUpdate: JobUpdate): Promise<JobRequest>;
   deleteJobRequest(id: string): Promise<void>;
+  
+  // Job logs methods
+  getJobLogs(jobId: string): Promise<any[]>;
+  getJobLogsSummary(jobId: string): Promise<any[]>;
+  getLatestJobLogs(jobId: string): Promise<any[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -263,6 +268,31 @@ export class DatabaseStorage implements IStorage {
 
   async deleteJobRequest(id: string): Promise<void> {
     await db.delete(jobRequests).where(eq(jobRequests.id, id));
+  }
+
+  // Job logs methods
+  async getJobLogs(jobId: string): Promise<any[]> {
+    const result = await db.execute(
+      `SELECT * FROM job_logs WHERE job_id = $1 ORDER BY created_at ASC`,
+      [jobId]
+    );
+    return result.rows;
+  }
+
+  async getJobLogsSummary(jobId: string): Promise<any[]> {
+    const result = await db.execute(
+      `SELECT * FROM job_logs_summary WHERE job_id = $1 ORDER BY step_started_at ASC`,
+      [jobId]
+    );
+    return result.rows;
+  }
+
+  async getLatestJobLogs(jobId: string): Promise<any[]> {
+    const result = await db.execute(
+      `SELECT * FROM job_latest_logs WHERE job_id = $1 ORDER BY created_at DESC`,
+      [jobId]
+    );
+    return result.rows;
   }
 }
 

@@ -252,7 +252,7 @@ export default function WorkspaceDetail({ params }: WorkspaceDetailProps) {
                         </td>
                         <td className="py-4 px-6">
                           <div className="flex space-x-2">
-                            <Link href={`/jobs/${job.id}`}>
+                            <Link href={`/jobs/${job.jobId}`}>
                               <Button size="sm" variant="ghost">
                                 <Eye className="mr-1 h-3 w-3" />
                                 View Details

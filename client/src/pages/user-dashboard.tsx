@@ -235,7 +235,7 @@ export default function UserDashboard() {
                         }`}>
                           {job.status}
                         </Badge>
-                        <Link href={`/jobs/${job.id}`}>
+                        <Link href={`/jobs/${job.jobId}`}>
                           <Button variant="outline" size="sm">View</Button>
                         </Link>
                       </div>
