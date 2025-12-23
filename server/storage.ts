@@ -1,12 +1,46 @@
-import { users, workspaces, jobRequests, type User, type InsertUser, type Workspace, type InsertWorkspace, type JobRequest, type InsertJobRequest, type JobUpdate, JobStatus } from "@shared/schema";
+import {
+  users,
+  workspaces,
+  jobRequests,
+  jobLogs,
+  type User,
+  type InsertUser,
+  type Workspace,
+  type InsertWorkspace,
+  type JobRequest,
+  type InsertJobRequest,
+  type PaginationParams,
+  type PaginatedJobsResponse,
+  type JobStats,
+} from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc, and, count, sql, SQL } from "drizzle-orm";
+
+// Extended workspace type with job statistics
+export interface WorkspaceWithJobCounts extends Workspace {
+  jobCounts: {
+    total: number;
+    completed: number;
+    running: number;
+    failed: number;
+    pending: number;
+  };
+}
+
+// Job request with workspace details
+export interface JobRequestWithWorkspace extends JobRequest {
+  workspace: {
+    id: string;
+    name: string;
+    githubRepo: string;
+    githubBranch: string;
+  } | null;
+}
 
 export interface IStorage {
   // User methods
   getUser(id: string): Promise<User | undefined>;
   getUserByGithubId(githubId: string): Promise<User | undefined>;
-  getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: string, updates: Partial<User>): Promise<User>;
   getAllUsers(): Promise<User[]>;
@@ -17,27 +51,21 @@ export interface IStorage {
   // Workspace methods
   getWorkspace(id: string): Promise<Workspace | undefined>;
   getWorkspacesByUserId(userId: string): Promise<Workspace[]>;
+  getWorkspacesWithJobCountsByUserId(userId: string): Promise<WorkspaceWithJobCounts[]>;
   getAllWorkspaces(): Promise<Workspace[]>;
   createWorkspace(workspace: InsertWorkspace): Promise<Workspace>;
-  updateWorkspace(id: string, updates: Partial<Workspace>): Promise<Workspace>;
-  deleteWorkspace(id: string): Promise<void>;
 
   // Job Request methods
-  getJobRequest(id: string): Promise<JobRequest | undefined>;
   getJobRequestByJobId(jobId: string): Promise<JobRequest | undefined>;
   getJobRequestsByWorkspaceId(workspaceId: string): Promise<JobRequest[]>;
   getJobRequestsByUserId(userId: string): Promise<JobRequest[]>;
-  getAllJobRequests(): Promise<JobRequest[]>;
+  getJobRequestsByUserIdPaginated(userId: string, params: PaginationParams): Promise<PaginatedJobsResponse<JobRequestWithWorkspace>>;
   getAllJobRequestsWithDetails(): Promise<any[]>;
   createJobRequest(jobRequest: InsertJobRequest): Promise<JobRequest>;
   updateJobRequest(id: string, updates: Partial<JobRequest>): Promise<JobRequest>;
-  updateJobStatus(jobId: string, statusUpdate: JobUpdate): Promise<JobRequest>;
-  deleteJobRequest(id: string): Promise<void>;
-  
+
   // Job logs methods
   getJobLogs(jobId: string): Promise<any[]>;
-  getJobLogsSummary(jobId: string): Promise<any[]>;
-  getLatestJobLogs(jobId: string): Promise<any[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -49,11 +77,6 @@ export class DatabaseStorage implements IStorage {
 
   async getUserByGithubId(githubId: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.githubId, githubId));
-    return user;
-  }
-
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    const [user] = await db.select().from(users).where(eq(users.username, username));
     return user;
   }
 
@@ -85,11 +108,11 @@ export class DatabaseStorage implements IStorage {
   async approveUser(userId: string, approverId: string): Promise<User> {
     const [user] = await db
       .update(users)
-      .set({ 
-        approvalStatus: "approved", 
-        approvedAt: new Date(), 
-        approvedBy: approverId, 
-        updatedAt: new Date() 
+      .set({
+        approvalStatus: "approved",
+        approvedAt: new Date(),
+        approvedBy: approverId,
+        updatedAt: new Date()
       })
       .where(eq(users.id, userId))
       .returning();
@@ -99,9 +122,9 @@ export class DatabaseStorage implements IStorage {
   async rejectUser(userId: string): Promise<User> {
     const [user] = await db
       .update(users)
-      .set({ 
-        approvalStatus: "rejected", 
-        updatedAt: new Date() 
+      .set({
+        approvalStatus: "rejected",
+        updatedAt: new Date()
       })
       .where(eq(users.id, userId))
       .returning();
@@ -111,11 +134,60 @@ export class DatabaseStorage implements IStorage {
   // Workspace methods
   async getWorkspace(id: string): Promise<Workspace | undefined> {
     const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, id));
-    return workspace || undefined;
+    return workspace;
   }
 
   async getWorkspacesByUserId(userId: string): Promise<Workspace[]> {
     return await db.select().from(workspaces).where(eq(workspaces.userId, userId)).orderBy(desc(workspaces.createdAt));
+  }
+
+  async getWorkspacesWithJobCountsByUserId(userId: string): Promise<WorkspaceWithJobCounts[]> {
+    // Get all workspaces for user
+    const userWorkspaces = await db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.userId, userId))
+      .orderBy(desc(workspaces.createdAt));
+
+    // Get job counts for each workspace in a single query
+    const jobCountsResult = await db
+      .select({
+        workspaceId: jobRequests.workspaceId,
+        total: count(),
+        completed: sql<number>`COUNT(*) FILTER (WHERE ${jobRequests.status} = 'completed')`,
+        running: sql<number>`COUNT(*) FILTER (WHERE ${jobRequests.status} = 'running')`,
+        failed: sql<number>`COUNT(*) FILTER (WHERE ${jobRequests.status} = 'failed')`,
+        pending: sql<number>`COUNT(*) FILTER (WHERE ${jobRequests.status} IN ('pending', 'queued'))`,
+      })
+      .from(jobRequests)
+      .where(eq(jobRequests.userId, userId))
+      .groupBy(jobRequests.workspaceId);
+
+    // Create a map of workspace ID to job counts
+    const jobCountsMap = new Map(
+      jobCountsResult.map(row => [
+        row.workspaceId,
+        {
+          total: Number(row.total),
+          completed: Number(row.completed),
+          running: Number(row.running),
+          failed: Number(row.failed),
+          pending: Number(row.pending),
+        }
+      ])
+    );
+
+    // Merge workspaces with their job counts
+    return userWorkspaces.map(workspace => ({
+      ...workspace,
+      jobCounts: jobCountsMap.get(workspace.id) || {
+        total: 0,
+        completed: 0,
+        running: 0,
+        failed: 0,
+        pending: 0,
+      },
+    }));
   }
 
   async getAllWorkspaces(): Promise<Workspace[]> {
@@ -130,28 +202,10 @@ export class DatabaseStorage implements IStorage {
     return workspace;
   }
 
-  async updateWorkspace(id: string, updates: Partial<Workspace>): Promise<Workspace> {
-    const [workspace] = await db
-      .update(workspaces)
-      .set({ ...updates, updatedAt: new Date() })
-      .where(eq(workspaces.id, id))
-      .returning();
-    return workspace;
-  }
-
-  async deleteWorkspace(id: string): Promise<void> {
-    await db.delete(workspaces).where(eq(workspaces.id, id));
-  }
-
   // Job Request methods
-  async getJobRequest(id: string): Promise<JobRequest | undefined> {
-    const [jobRequest] = await db.select().from(jobRequests).where(eq(jobRequests.id, id));
-    return jobRequest || undefined;
-  }
-
   async getJobRequestByJobId(jobId: string): Promise<JobRequest | undefined> {
     const [jobRequest] = await db.select().from(jobRequests).where(eq(jobRequests.jobId, jobId));
-    return jobRequest || undefined;
+    return jobRequest;
   }
 
   async getJobRequestsByWorkspaceId(workspaceId: string): Promise<JobRequest[]> {
@@ -162,8 +216,86 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(jobRequests).where(eq(jobRequests.userId, userId)).orderBy(desc(jobRequests.createdAt));
   }
 
-  async getAllJobRequests(): Promise<JobRequest[]> {
-    return await db.select().from(jobRequests).orderBy(desc(jobRequests.createdAt));
+  async getJobRequestsByUserIdPaginated(
+    userId: string,
+    params: PaginationParams
+  ): Promise<PaginatedJobsResponse<JobRequestWithWorkspace>> {
+    const page = Math.max(1, params.page || 1);
+    const limit = Math.min(100, Math.max(1, params.limit || 10));
+    const offset = (page - 1) * limit;
+
+    // Build where conditions for filtered count (respects status filter)
+    const conditions: SQL[] = [eq(jobRequests.userId, userId)];
+    if (params.status) {
+      conditions.push(eq(jobRequests.status, params.status));
+    }
+
+    // Get filtered count (for pagination)
+    const [countResult] = await db
+      .select({ count: count() })
+      .from(jobRequests)
+      .where(and(...conditions));
+    const total = countResult?.count || 0;
+
+    // Get overall stats for all user's jobs (ignores status filter)
+    const [statsResult] = await db
+      .select({
+        total: count(),
+        completed: sql<number>`COUNT(*) FILTER (WHERE ${jobRequests.status} = 'completed')`,
+        running: sql<number>`COUNT(*) FILTER (WHERE ${jobRequests.status} = 'running')`,
+        failed: sql<number>`COUNT(*) FILTER (WHERE ${jobRequests.status} = 'failed')`,
+        pending: sql<number>`COUNT(*) FILTER (WHERE ${jobRequests.status} = 'pending')`,
+        queued: sql<number>`COUNT(*) FILTER (WHERE ${jobRequests.status} = 'queued')`,
+      })
+      .from(jobRequests)
+      .where(eq(jobRequests.userId, userId));
+
+    const stats: JobStats = {
+      total: Number(statsResult?.total || 0),
+      completed: Number(statsResult?.completed || 0),
+      running: Number(statsResult?.running || 0),
+      failed: Number(statsResult?.failed || 0),
+      pending: Number(statsResult?.pending || 0),
+      queued: Number(statsResult?.queued || 0),
+    };
+
+    // Get paginated data with workspace details via left join
+    const rows = await db
+      .select({
+        jobRequest: jobRequests,
+        workspace: {
+          id: workspaces.id,
+          name: workspaces.name,
+          githubRepo: workspaces.githubRepo,
+          githubBranch: workspaces.githubBranch,
+        },
+      })
+      .from(jobRequests)
+      .leftJoin(workspaces, eq(jobRequests.workspaceId, workspaces.id))
+      .where(and(...conditions))
+      .orderBy(desc(jobRequests.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    // Transform to JobRequestWithWorkspace format
+    const data: JobRequestWithWorkspace[] = rows.map(row => ({
+      ...row.jobRequest,
+      workspace: row.workspace,
+    }));
+
+    const totalPages = Math.ceil(total / limit);
+
+    return {
+      data,
+      stats,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+        hasMore: page < totalPages,
+      },
+    };
   }
 
   async getAllJobRequestsWithDetails(): Promise<any[]> {
@@ -215,85 +347,11 @@ export class DatabaseStorage implements IStorage {
     return jobRequest;
   }
 
-  async updateJobStatus(jobId: string, statusUpdate: JobUpdate): Promise<JobRequest> {
-    const updateData: any = { 
-      status: statusUpdate.status, 
-      updatedAt: new Date() 
-    };
-    
-    // Add optional fields if provided
-    if (statusUpdate.resultMetadata) updateData.resultMetadata = statusUpdate.resultMetadata;
-    if (statusUpdate.errorMessage) updateData.errorMessage = statusUpdate.errorMessage;
-    if (statusUpdate.executionOutput) updateData.executionOutput = statusUpdate.executionOutput;
-    if (statusUpdate.executionError) updateData.executionError = statusUpdate.executionError;
-    if (statusUpdate.executionMethod) updateData.executionMethod = statusUpdate.executionMethod;
-    if (statusUpdate.exitCode !== undefined) updateData.exitCode = statusUpdate.exitCode;
-    if (statusUpdate.validationStatus) updateData.validationStatus = statusUpdate.validationStatus;
-    if (statusUpdate.validationPolicy) updateData.validationPolicy = statusUpdate.validationPolicy;
-    if (statusUpdate.validationDecision) updateData.validationDecision = statusUpdate.validationDecision;
-    if (statusUpdate.aiLogs) updateData.aiLogs = statusUpdate.aiLogs;
-    
-    // Get current job data to calculate duration
-    const currentJob = await db
-      .select()
-      .from(jobRequests)
-      .where(eq(jobRequests.jobId, jobId))
-      .limit(1);
-    
-    if (currentJob.length === 0) {
-      throw new Error(`Job not found: ${jobId}`);
-    }
-    
-    const job = currentJob[0];
-    
-    // Update timestamps based on status  
-    if (statusUpdate.status === JobStatus.RUNNING) {
-      updateData.startedAt = new Date();
-    } else if ([JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.VALIDATED, JobStatus.REJECTED].includes(statusUpdate.status)) {
-      updateData.completedAt = new Date();
-      // Calculate duration from stored startedAt or createdAt if startedAt is null
-      const startTime = job.startedAt || job.createdAt;
-      if (startTime) {
-        updateData.durationSeconds = Math.floor((updateData.completedAt.getTime() - startTime.getTime()) / 1000);
-      }
-    }
-
-    const [jobRequest] = await db
-      .update(jobRequests)
-      .set(updateData)
-      .where(eq(jobRequests.jobId, jobId))
-      .returning();
-    return jobRequest;
-  }
-
-  async deleteJobRequest(id: string): Promise<void> {
-    await db.delete(jobRequests).where(eq(jobRequests.id, id));
-  }
-
   // Job logs methods
   async getJobLogs(jobId: string): Promise<any[]> {
-    const result = await db.execute(
-      `SELECT * FROM job_logs WHERE job_id = $1 ORDER BY created_at ASC`,
-      [jobId]
-    );
-    return result.rows;
+    return db.select().from(jobLogs).where(eq(jobLogs.jobId, jobId)).orderBy(jobLogs.createdAt);
   }
 
-  async getJobLogsSummary(jobId: string): Promise<any[]> {
-    const result = await db.execute(
-      `SELECT * FROM job_logs_summary WHERE job_id = $1 ORDER BY step_started_at ASC`,
-      [jobId]
-    );
-    return result.rows;
-  }
-
-  async getLatestJobLogs(jobId: string): Promise<any[]> {
-    const result = await db.execute(
-      `SELECT * FROM job_latest_logs WHERE job_id = $1 ORDER BY created_at DESC`,
-      [jobId]
-    );
-    return result.rows;
-  }
 }
 
 export const storage = new DatabaseStorage();

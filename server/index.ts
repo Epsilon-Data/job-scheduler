@@ -5,20 +5,33 @@ dotenv.config();
 
 import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
+import type { SessionOptions } from "express-session";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import { errorHandler } from "./middleware";
+
+// Validate required environment variables
+if (!process.env.SESSION_SECRET) {
+  console.error("FATAL: SESSION_SECRET environment variable is not set");
+  process.exit(1);
+}
 
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
-// Session configuration
-const sessionConfig: any = {
-  secret: process.env.SESSION_SECRET || "your-secret-key-here",
+// Session configuration with proper typing
+// COOKIE_SECURE can override the default behavior (useful for Docker with HTTP)
+const secureCookie = process.env.COOKIE_SECURE !== undefined
+  ? process.env.COOKIE_SECURE === 'true'
+  : process.env.NODE_ENV === "production";
+
+const sessionConfig: SessionOptions = {
+  secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: true, // Allow session creation for OAuth flow
   cookie: {
-    secure: false, // Set to false for HTTP in Docker
+    secure: secureCookie,
     httpOnly: true,
     maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
     sameSite: "lax", // Allow cross-site requests for OAuth
@@ -32,6 +45,7 @@ if (process.env.NODE_ENV === "production") {
 
 app.use(session(sessionConfig));
 
+// Request logging middleware
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
@@ -65,17 +79,11 @@ app.use((req, res, next) => {
 (async () => {
   const server = await registerRoutes(app);
 
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
+  // Use centralized error handler
+  app.use(errorHandler);
 
-    res.status(status).json({ message });
-    throw err;
-  });
-
-  // importantly only setup vite in development and after
-  // setting up all the other routes so the catch-all route
-  // doesn't interfere with the other routes
+  // Setup vite in development only, after all other routes
+  // so the catch-all route doesn't interfere with API routes
   if (app.get("env") === "development") {
     await setupVite(app, server);
   } else {
@@ -83,7 +91,6 @@ app.use((req, res, next) => {
   }
 
   // Serve the app on configured port or default 5000
-  // this serves both the API and the client.
   const port = parseInt(process.env.PORT || "5000", 10);
   server.listen(port, "0.0.0.0", () => {
     log(`serving on port ${port}`);

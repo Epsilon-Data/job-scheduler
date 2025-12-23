@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,7 @@ import { Clock } from "lucide-react";
 import { useLocation } from "wouter";
 import { approvalRequestSchema, type ApprovalRequest } from "@shared/schema";
 
-export default function ApprovalRequest() {
+export default function ApprovalRequestPage() {
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -57,8 +58,13 @@ export default function ApprovalRequest() {
   });
 
   // Redirect if already approved
+  useEffect(() => {
+    if (user?.approvalStatus === "approved") {
+      setLocation("/dashboard");
+    }
+  }, [user?.approvalStatus, setLocation]);
+
   if (user?.approvalStatus === "approved") {
-    setLocation("/dashboard");
     return null;
   }
 

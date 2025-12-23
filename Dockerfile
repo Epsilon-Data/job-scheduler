@@ -1,7 +1,7 @@
 FROM node:18-alpine
 
-# Install dependencies
-RUN apk add --no-cache git
+# Install dependencies (git for npm packages, wget for healthcheck)
+RUN apk add --no-cache git wget
 
 # Set working directory
 WORKDIR /app
@@ -9,20 +9,17 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm install
+# Install all dependencies (dev deps needed for build)
+RUN npm ci
 
-# Copy source code
+# Copy source code (excluding files in .dockerignore)
 COPY . .
 
 # Build the application
 RUN npm run build
 
-# Expose port
+# Default port (can be overridden via PORT env var)
 EXPOSE 3005
-
-# Copy .env file for production defaults
-COPY .env .env
 
 # Start the application
 CMD ["npm", "run", "start"]

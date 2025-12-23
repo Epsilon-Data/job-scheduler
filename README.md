@@ -81,3 +81,12 @@ See `.env.example` for required configuration:
 - `GITHUB_CLIENT_SECRET` - GitHub OAuth app secret
 - `GITHUB_REDIRECT_URI` - OAuth callback URL
 - `DATABASE_URL` - PostgreSQL connection string
+
+
+```
+Change Github redirect uri  : 
+
+http://localhost:8080/realms/epsilon/broker/github/endpoint
+
+http://localhost:3005/api/auth/github/callback
+```
