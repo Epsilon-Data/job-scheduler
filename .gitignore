@@ -4,4 +4,27 @@ dist
 server/public
 vite.config.ts.*
 *.tar.gz
+
+# Environment files (secrets)
 .env
+.env.local
+
+# IDE settings
+.idea/
+.vscode/
+.claude/
+
+# Runtime directories
+data/
+logs/
+
+# OS files
+Thumbs.db
+
+# Build/push scripts with credentials
+push-to-ghcr.sh
+build-and-push-multiarch.sh
+
+# Replit files
+replit.md
+.replit

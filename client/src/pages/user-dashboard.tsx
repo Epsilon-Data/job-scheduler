@@ -1,25 +1,56 @@
+import { useMemo, useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Folder, Play, Clock, Plus, Github, GitBranch, Calendar } from "lucide-react";
+import { Folder, Play, Clock, Plus, Github, GitBranch, Calendar, ChevronLeft, ChevronRight } from "lucide-react";
 import { Link, useLocation } from "wouter";
-import type { Workspace, JobRequest } from "@shared/schema";
+import { LoadingSpinner } from "@/components/loading-spinner";
+import { getJobStatusColor, getJobStatusDotColor } from "@/lib/status-utils";
+import { formatDate } from "@/lib/date-utils";
+import type { Workspace, JobRequest, PaginatedJobsResponse } from "@shared/schema";
+
+// Extended workspace type with job statistics (matches server response)
+interface WorkspaceWithJobCounts extends Workspace {
+  jobCounts: {
+    total: number;
+    completed: number;
+    running: number;
+    failed: number;
+    pending: number;
+  };
+}
+
+// Job request with workspace details (matches server response)
+interface JobRequestWithWorkspace extends JobRequest {
+  workspace: {
+    id: string;
+    name: string;
+    githubRepo: string;
+    githubBranch: string;
+  } | null;
+}
 
 export default function UserDashboard() {
   const { user } = useAuth();
   const [location] = useLocation();
-  
-  const { data: workspaces = [], isLoading } = useQuery<Workspace[]>({
+  const [jobsPage, setJobsPage] = useState(1);
+  const jobsLimit = 10;
+
+  const { data: workspaces = [], isLoading } = useQuery<WorkspaceWithJobCounts[]>({
     queryKey: ["/api/workspaces"],
     enabled: user?.approvalStatus === "approved",
   });
 
-  const { data: jobRequests = [] } = useQuery<JobRequest[]>({
-    queryKey: ["/api/user/jobs"],
+  const { data: jobsResponse, isLoading: isLoadingJobs } = useQuery<PaginatedJobsResponse<JobRequestWithWorkspace>>({
+    queryKey: ["/api/user/jobs", { page: jobsPage, limit: jobsLimit }],
     enabled: user?.approvalStatus === "approved",
   });
+
+  const jobRequests = jobsResponse?.data ?? [];
+  const pagination = jobsResponse?.pagination;
+  const jobStats = jobsResponse?.stats;
 
   if (user?.approvalStatus !== "approved") {
     return (
@@ -40,32 +71,19 @@ export default function UserDashboard() {
     );
   }
 
+  const pageInfo = useMemo(() => {
+    if (location === "/workspaces") {
+      return { title: "Workspaces", description: "Manage your research workspaces and repository connections." };
+    }
+    if (location === "/jobs") {
+      return { title: "Job Requests", description: "View and manage your computational job requests." };
+    }
+    return { title: "Dashboard", description: `Welcome back, ${user?.fullName || user?.username}! Here's what's happening with your research.` };
+  }, [location, user?.fullName, user?.username]);
+
   if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-muted-foreground">Loading...</p>
-        </div>
-      </div>
-    );
+    return <LoadingSpinner message="Loading dashboard..." />;
   }
-
-  const getPageTitle = () => {
-    if (location === "/workspaces") return "Workspaces";
-    if (location === "/jobs") return "Job Requests";
-    return "Dashboard";
-  };
-
-  const getPageDescription = () => {
-    if (location === "/workspaces") return "Manage your research workspaces and repository connections.";
-    if (location === "/jobs") return "View and manage your computational job requests.";
-    return `Welcome back, ${user.name}! Here's what's happening with your research.`;
-  };
-
-  const completedJobs = jobRequests.filter(job => job.status === "completed").length;
-  const runningJobs = jobRequests.filter(job => job.status === "running").length;
-  const queuedJobs = jobRequests.filter(job => job.status === "queued").length;
 
 
 
@@ -73,8 +91,8 @@ export default function UserDashboard() {
     <div className="min-h-screen bg-background">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-foreground">{getPageTitle()}</h1>
-          <p className="mt-2 text-muted-foreground">{getPageDescription()}</p>
+          <h1 className="text-3xl font-bold text-foreground">{pageInfo.title}</h1>
+          <p className="mt-2 text-muted-foreground">{pageInfo.description}</p>
         </div>
 
         {/* Quick Stats - Show only on Dashboard */}
@@ -101,7 +119,7 @@ export default function UserDashboard() {
                     <Play className="h-5 w-5 text-green-600" />
                   </div>
                   <div className="ml-4">
-                    <h3 className="text-lg font-semibold text-foreground">{completedJobs}</h3>
+                    <h3 className="text-lg font-semibold text-foreground">{jobStats?.completed ?? 0}</h3>
                     <p className="text-sm text-muted-foreground">Completed Jobs</p>
                   </div>
                 </div>
@@ -115,7 +133,7 @@ export default function UserDashboard() {
                     <Clock className="h-5 w-5 text-yellow-600" />
                   </div>
                   <div className="ml-4">
-                    <h3 className="text-lg font-semibold text-foreground">{queuedJobs + runningJobs}</h3>
+                    <h3 className="text-lg font-semibold text-foreground">{(jobStats?.queued ?? 0) + (jobStats?.running ?? 0)}</h3>
                     <p className="text-sm text-muted-foreground">Jobs Running</p>
                   </div>
                 </div>
@@ -172,15 +190,20 @@ export default function UserDashboard() {
                         </div>
                         <div className="flex items-center text-sm text-muted-foreground">
                           <Calendar className="mr-2 h-4 w-4" />
-                          <span>Created {new Date(workspace.createdAt).toLocaleDateString()}</span>
+                          <span>Created {formatDate(workspace.createdAt)}</span>
                         </div>
                       </div>
 
                       <div className="flex justify-between items-center">
-                        <span className="text-sm text-muted-foreground">
-                          {/* TODO: Add job count */}
-                          0 jobs completed
-                        </span>
+                        <div className="flex items-center gap-2 text-sm">
+                          <span className="text-green-600">{workspace.jobCounts?.completed || 0} completed</span>
+                          {(workspace.jobCounts?.running || 0) > 0 && (
+                            <span className="text-blue-600">• {workspace.jobCounts.running} running</span>
+                          )}
+                          {(workspace.jobCounts?.failed || 0) > 0 && (
+                            <span className="text-red-600">• {workspace.jobCounts.failed} failed</span>
+                          )}
+                        </div>
                         <Link href={`/workspaces/${workspace.id}`}>
                           <Button variant="outline" size="sm">
                             View Details
@@ -201,11 +224,22 @@ export default function UserDashboard() {
           <Card className="mt-8">
             <CardHeader>
               <div className="flex justify-between items-center">
-                <CardTitle>{location === "/jobs" ? "All Job Requests" : "Recent Job Requests"}</CardTitle>
+                <CardTitle>
+                  {location === "/jobs" ? "All Job Requests" : "Recent Job Requests"}
+                  {pagination && location === "/jobs" && (
+                    <span className="text-sm font-normal text-muted-foreground ml-2">
+                      ({pagination.total} total)
+                    </span>
+                  )}
+                </CardTitle>
               </div>
             </CardHeader>
             <CardContent>
-              {jobRequests.length === 0 ? (
+              {isLoadingJobs ? (
+                <div className="flex justify-center py-8">
+                  <LoadingSpinner message="Loading jobs..." />
+                </div>
+              ) : jobRequests.length === 0 ? (
                 <div className="text-center py-8">
                   <p className="text-muted-foreground mb-4">No job requests yet.</p>
                   <p className="text-sm text-muted-foreground">Create a workspace first, then submit job requests.</p>
@@ -215,24 +249,27 @@ export default function UserDashboard() {
                   {(location === "/jobs" ? jobRequests : jobRequests.slice(0, 5)).map((job) => (
                     <div key={job.id} className="flex items-center justify-between p-4 border rounded-lg hover:shadow-sm transition-shadow">
                       <div className="flex items-center space-x-4">
-                        <div className={`w-3 h-3 rounded-full ${
-                          job.status === "completed" ? "bg-green-500" :
-                          job.status === "running" ? "bg-blue-500" :
-                          job.status === "failed" ? "bg-red-500" : "bg-yellow-500"
-                        }`}></div>
+                        <div className={`w-3 h-3 rounded-full ${getJobStatusDotColor(job.status)}`} />
                         <div>
                           <p className="font-medium">{job.commitMessage || "Job Request"}</p>
-                          <p className="text-sm text-muted-foreground">
-                            {job.commitSha?.substring(0, 7)} • {new Date(job.createdAt).toLocaleDateString()}
-                          </p>
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <span>{job.commitSha?.substring(0, 7)}</span>
+                            <span>•</span>
+                            <span>{formatDate(job.createdAt)}</span>
+                            {job.workspace && (
+                              <>
+                                <span>•</span>
+                                <Link href={`/workspaces/${job.workspace.id}`} className="flex items-center gap-1 hover:text-foreground">
+                                  <Folder className="h-3 w-3" />
+                                  <span>{job.workspace.name}</span>
+                                </Link>
+                              </>
+                            )}
+                          </div>
                         </div>
                       </div>
                       <div className="flex items-center space-x-3">
-                        <Badge className={`${
-                          job.status === "completed" ? "bg-green-100 text-green-800" :
-                          job.status === "running" ? "bg-blue-100 text-blue-800" :
-                          job.status === "failed" ? "bg-red-100 text-red-800" : "bg-yellow-100 text-yellow-800"
-                        }`}>
+                        <Badge className={getJobStatusColor(job.status)}>
                           {job.status}
                         </Badge>
                         <Link href={`/jobs/${job.jobId}`}>
@@ -241,10 +278,46 @@ export default function UserDashboard() {
                       </div>
                     </div>
                   ))}
-                  {location === "/dashboard" && jobRequests.length > 5 && (
+
+                  {/* Pagination Controls - Only on /jobs page */}
+                  {location === "/jobs" && pagination && pagination.totalPages > 1 && (
+                    <div className="flex items-center justify-between pt-4 border-t">
+                      <p className="text-sm text-muted-foreground">
+                        Showing {((pagination.page - 1) * pagination.limit) + 1} to{" "}
+                        {Math.min(pagination.page * pagination.limit, pagination.total)} of{" "}
+                        {pagination.total} jobs
+                      </p>
+                      <div className="flex items-center space-x-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setJobsPage(p => Math.max(1, p - 1))}
+                          disabled={pagination.page <= 1}
+                        >
+                          <ChevronLeft className="h-4 w-4 mr-1" />
+                          Previous
+                        </Button>
+                        <span className="text-sm text-muted-foreground px-2">
+                          Page {pagination.page} of {pagination.totalPages}
+                        </span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setJobsPage(p => p + 1)}
+                          disabled={!pagination.hasMore}
+                        >
+                          Next
+                          <ChevronRight className="h-4 w-4 ml-1" />
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Link to all jobs - Only on dashboard */}
+                  {location === "/dashboard" && pagination && pagination.total > 5 && (
                     <div className="text-center pt-4">
                       <Link href="/jobs">
-                        <Button variant="outline">View All Job Requests</Button>
+                        <Button variant="outline">View All {pagination.total} Job Requests</Button>
                       </Link>
                     </div>
                   )}

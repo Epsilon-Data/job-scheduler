@@ -1,6 +1,6 @@
 import * as process from "node:process";
 
-interface GitHubUser {
+export interface GitHubUser {
   id: number;
   login: string;
   email: string;
@@ -8,7 +8,7 @@ interface GitHubUser {
   avatar_url: string;
 }
 
-interface GitHubRepo {
+export interface GitHubRepo {
   id: number;
   name: string;
   full_name: string;
@@ -21,14 +21,14 @@ interface GitHubRepo {
   updated_at: string;
 }
 
-interface GitHubBranch {
+export interface GitHubBranch {
   name: string;
   commit: {
     sha: string;
   };
 }
 
-interface GitHubCommit {
+export interface GitHubCommit {
   sha: string;
   commit: {
     message: string;
@@ -40,7 +40,10 @@ interface GitHubCommit {
 }
 
 export const githubApi = {
-  async exchangeCodeForToken(code: string, req: any): Promise<{ accessToken: string; user: GitHubUser }> {
+  /**
+   * Exchange OAuth authorization code for access token and user info
+   */
+  async exchangeCodeForToken(code: string): Promise<{ accessToken: string; user: GitHubUser }> {
     const clientId = process.env.GITHUB_CLIENT_ID;
     const clientSecret = process.env.GITHUB_CLIENT_SECRET;
     

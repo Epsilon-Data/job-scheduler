@@ -16,6 +16,47 @@ interface CreateJobRequestProps {
   };
 }
 
+interface GitHubCommit {
+  sha: string;
+  message: string;
+  author: string;
+  date: string;
+  commit?: {
+    sha?: string;
+    message?: string;
+    author?: {
+      name?: string;
+      date?: string;
+    };
+  };
+}
+
+interface GitHubFileEntry {
+  name: string;
+  type: "file" | "dir";
+  size?: number;
+  path?: string;
+}
+
+interface GitHubFileContent {
+  type: string;
+  content?: string;
+  encoding?: string;
+}
+
+/**
+ * Decode base64 content with proper UTF-8 support
+ */
+function decodeBase64Content(base64: string): string {
+  try {
+    const binaryString = atob(base64);
+    const bytes = Uint8Array.from(binaryString, (char) => char.charCodeAt(0));
+    return new TextDecoder("utf-8").decode(bytes);
+  } catch {
+    return atob(base64); // Fallback for simple ASCII
+  }
+}
+
 export default function CreateJobRequest({ params }: CreateJobRequestProps) {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -23,29 +64,28 @@ export default function CreateJobRequest({ params }: CreateJobRequestProps) {
   const [, setLocation] = useLocation();
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [currentPath, setCurrentPath] = useState<string>("");
-  const [folderContents, setFolderContents] = useState<{ [key: string]: any[] }>({});
 
   const { data: workspace, isLoading } = useQuery<Workspace>({
     queryKey: [`/api/workspaces/${params.workspaceId}`],
     enabled: user?.approvalStatus === "approved",
   });
 
-  const { data: latestCommit } = useQuery({
+  const { data: latestCommit } = useQuery<GitHubCommit>({
     queryKey: [`/api/github/repos/${workspace?.githubRepo}/commits/${workspace?.githubBranch}`],
     enabled: !!workspace?.githubRepo && !!workspace?.githubBranch,
   });
 
-  const { data: repoFiles } = useQuery({
+  const { data: repoFiles } = useQuery<GitHubFileEntry[]>({
     queryKey: [`/api/github/repos/${workspace?.githubRepo}/contents${currentPath ? `/${currentPath}` : ""}`],
     enabled: !!workspace?.githubRepo,
   });
 
-  const { data: fileContent } = useQuery({
+  const { data: fileContent } = useQuery<GitHubFileContent>({
     queryKey: [`/api/github/repos/${workspace?.githubRepo}/contents/${currentPath ? `${currentPath}/` : ""}${selectedFile}`],
     enabled: !!workspace?.githubRepo && !!selectedFile,
   });
 
-  const handleFileClick = (file: any) => {
+  const handleFileClick = (file: GitHubFileEntry) => {
     if (file.type === 'dir') {
       const newPath = currentPath ? `${currentPath}/${file.name}` : file.name;
       setCurrentPath(newPath);
@@ -249,7 +289,7 @@ export default function CreateJobRequest({ params }: CreateJobRequestProps) {
                     )}
                   </div>
                   <div className="max-h-96 overflow-y-auto">
-                    {repoFiles?.map((file: any) => (
+                    {repoFiles?.map((file) => (
                       <div 
                         key={file.name} 
                         className={`flex items-center p-3 hover:bg-muted/50 cursor-pointer border-b border-border/50 transition-colors ${
@@ -299,7 +339,7 @@ export default function CreateJobRequest({ params }: CreateJobRequestProps) {
                         {fileContent.type === "file" && fileContent.content ? (
                           <div className="relative">
                             <pre className="text-xs font-mono bg-slate-50 dark:bg-slate-900 p-4 overflow-x-auto border-0 rounded-none">
-                              {atob(fileContent.content).split('\n').map((line, index) => (
+                              {decodeBase64Content(fileContent.content).split('\n').map((line: string, index: number) => (
                                 <div key={index} className="flex">
                                   <span className="text-slate-400 dark:text-slate-500 select-none pr-4 text-right min-w-[3rem] border-r border-slate-200 dark:border-slate-700 mr-4">
                                     {index + 1}

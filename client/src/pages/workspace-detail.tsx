@@ -7,6 +7,9 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Settings, Github, GitBranch, GitCommit, Eye, Download, X } from "lucide-react";
 import { Link, useLocation } from "wouter";
+import { LoadingSpinner } from "@/components/loading-spinner";
+import { getJobStatusColor } from "@/lib/status-utils";
+import { formatDateTimeShort, formatDuration } from "@/lib/date-utils";
 import type { Workspace, JobRequest } from "@shared/schema";
 import { useState } from "react";
 import {
@@ -21,6 +24,15 @@ import {
 interface WorkspaceDetailProps {
   params: {
     id: string;
+  };
+}
+
+interface GitHubCommit {
+  sha?: string;
+  message?: string;
+  commit?: {
+    sha?: string;
+    message?: string;
   };
 }
 
@@ -42,7 +54,7 @@ export default function WorkspaceDetail({ params }: WorkspaceDetailProps) {
     enabled: !!workspace,
   });
 
-  const { data: latestCommit } = useQuery({
+  const { data: latestCommit } = useQuery<GitHubCommit>({
     queryKey: [`/api/github/repos/${workspace?.githubRepo}/commits/${workspace?.githubBranch}`],
     enabled: !!workspace?.githubRepo && !!workspace?.githubBranch,
   });
@@ -57,7 +69,7 @@ export default function WorkspaceDetail({ params }: WorkspaceDetailProps) {
         title: "Job request created",
         description: "Your job request has been submitted successfully.",
       });
-      queryClient.invalidateQueries({ queryKey: ["/api/workspaces", params.id, "jobs"] });
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${params.id}/jobs`] });
     },
     onError: (error: Error) => {
       toast({
@@ -69,14 +81,7 @@ export default function WorkspaceDetail({ params }: WorkspaceDetailProps) {
   });
 
   if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-muted-foreground">Loading...</p>
-        </div>
-      </div>
-    );
+    return <LoadingSpinner message="Loading workspace..." />;
   }
 
   if (!workspace) {
@@ -90,20 +95,6 @@ export default function WorkspaceDetail({ params }: WorkspaceDetailProps) {
     );
   }
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "completed":
-        return "bg-green-100 text-green-800";
-      case "running":
-        return "bg-blue-100 text-blue-800";
-      case "failed":
-        return "bg-red-100 text-red-800";
-      case "queued":
-        return "bg-yellow-100 text-yellow-800";
-      default:
-        return "bg-gray-100 text-gray-800";
-    }
-  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -240,13 +231,13 @@ export default function WorkspaceDetail({ params }: WorkspaceDetailProps) {
                           </div>
                         </td>
                         <td className="py-4 px-6 text-sm text-muted-foreground">
-                          {new Date(job.createdAt).toLocaleDateString()} {new Date(job.createdAt).toLocaleTimeString()}
+                          {formatDateTimeShort(job.createdAt)}
                         </td>
                         <td className="py-4 px-6 text-sm text-muted-foreground">
-                          {job.durationSeconds ? `${Math.floor(job.durationSeconds / 60)}m ${job.durationSeconds % 60}s` : "-"}
+                          {formatDuration(job.durationSeconds)}
                         </td>
                         <td className="py-4 px-6">
-                          <Badge className={getStatusColor(job.status)}>
+                          <Badge className={getJobStatusColor(job.status)}>
                             {job.status}
                           </Badge>
                         </td>

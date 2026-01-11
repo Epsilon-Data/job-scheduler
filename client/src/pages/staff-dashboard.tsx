@@ -1,3 +1,4 @@
+import { useEffect, useMemo } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
@@ -8,7 +9,11 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useToast } from "@/hooks/use-toast";
 import { Users, Clock, CheckCircle, Server, Github } from "lucide-react";
 import { useLocation } from "wouter";
-import type { User } from "@shared/schema";
+import { LoadingSpinner } from "@/components/loading-spinner";
+import { getApprovalStatusVariant } from "@/lib/status-utils";
+import { getJobStatusColor } from "@/lib/status-utils";
+import { formatDate } from "@/lib/date-utils";
+import type { User, Workspace, JobRequest } from "@shared/schema";
 
 export default function StaffDashboard() {
   const { user } = useAuth();
@@ -17,8 +22,13 @@ export default function StaffDashboard() {
   const [, setLocation] = useLocation();
 
   // Redirect if not staff
+  useEffect(() => {
+    if (user && user.role !== "staff") {
+      setLocation("/dashboard");
+    }
+  }, [user, setLocation]);
+
   if (user && user.role !== "staff") {
-    setLocation("/dashboard");
     return null;
   }
 
@@ -32,12 +42,12 @@ export default function StaffDashboard() {
     enabled: user?.role === "staff",
   });
 
-  const { data: allWorkspaces = [] } = useQuery({
+  const { data: allWorkspaces = [] } = useQuery<Workspace[]>({
     queryKey: ["/api/staff/workspaces"],
     enabled: user?.role === "staff",
   });
 
-  const { data: allJobs = [] } = useQuery({
+  const { data: allJobs = [] } = useQuery<JobRequest[]>({
     queryKey: ["/api/staff/jobs"],
     enabled: user?.role === "staff",
   });
@@ -86,21 +96,16 @@ export default function StaffDashboard() {
     },
   });
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-muted-foreground">Loading...</p>
-        </div>
-      </div>
-    );
-  }
+  const stats = useMemo(() => ({
+    totalUsers: users.length,
+    pendingCount: pendingUsers.length,
+    approvedCount: users.filter(u => u.approvalStatus === "approved").length,
+    activeWorkspaces: allWorkspaces.filter(w => w.status === "active").length,
+  }), [users, pendingUsers, allWorkspaces]);
 
-  const totalUsers = users.length;
-  const pendingCount = pendingUsers.length;
-  const approvedCount = users.filter(u => u.approvalStatus === "approved").length;
-  const activeWorkspaces = allWorkspaces.filter((w: any) => w.status === "active").length;
+  if (isLoading) {
+    return <LoadingSpinner message="Loading staff dashboard..." />
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -121,7 +126,7 @@ export default function StaffDashboard() {
                   <Users className="h-5 w-5 text-primary" />
                 </div>
                 <div className="ml-4">
-                  <h3 className="text-lg font-semibold text-foreground">{totalUsers}</h3>
+                  <h3 className="text-lg font-semibold text-foreground">{stats.totalUsers}</h3>
                   <p className="text-sm text-muted-foreground">Total Users</p>
                 </div>
               </div>
@@ -135,7 +140,7 @@ export default function StaffDashboard() {
                   <Clock className="h-5 w-5 text-warning" />
                 </div>
                 <div className="ml-4">
-                  <h3 className="text-lg font-semibold text-foreground">{pendingCount}</h3>
+                  <h3 className="text-lg font-semibold text-foreground">{stats.pendingCount}</h3>
                   <p className="text-sm text-muted-foreground">Pending Approvals</p>
                 </div>
               </div>
@@ -149,7 +154,7 @@ export default function StaffDashboard() {
                   <CheckCircle className="h-5 w-5 text-success" />
                 </div>
                 <div className="ml-4">
-                  <h3 className="text-lg font-semibold text-foreground">{approvedCount}</h3>
+                  <h3 className="text-lg font-semibold text-foreground">{stats.approvedCount}</h3>
                   <p className="text-sm text-muted-foreground">Approved Users</p>
                 </div>
               </div>
@@ -163,7 +168,7 @@ export default function StaffDashboard() {
                   <Server className="h-5 w-5 text-purple-600" />
                 </div>
                 <div className="ml-4">
-                  <h3 className="text-lg font-semibold text-foreground">{activeWorkspaces}</h3>
+                  <h3 className="text-lg font-semibold text-foreground">{stats.activeWorkspaces}</h3>
                   <p className="text-sm text-muted-foreground">Active Workspaces</p>
                 </div>
               </div>
@@ -223,18 +228,10 @@ export default function StaffDashboard() {
                         {user.institution || "N/A"}
                       </td>
                       <td className="py-4 px-6 text-sm text-muted-foreground">
-                        {new Date(user.createdAt).toLocaleDateString()}
+                        {formatDate(user.createdAt)}
                       </td>
                       <td className="py-4 px-6">
-                        <Badge
-                          variant={
-                            user.approvalStatus === "approved"
-                              ? "default"
-                              : user.approvalStatus === "pending"
-                              ? "secondary"
-                              : "destructive"
-                          }
-                        >
+                        <Badge variant={getApprovalStatusVariant(user.approvalStatus as "approved" | "pending" | "rejected")}>
                           {user.approvalStatus}
                         </Badge>
                       </td>
@@ -292,58 +289,46 @@ export default function StaffDashboard() {
             </Card>
           ) : (
             <div className="space-y-4">
-              {allJobs.map((job: any) => (
+              {allJobs.map((job) => (
                 <Card key={job.id} className="hover:shadow-md transition-shadow">
                   <CardContent className="p-6">
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
                         <div className="flex items-center gap-3 mb-3">
                           <h3 className="font-semibold text-foreground">{job.jobId}</h3>
-                          <Badge variant={
-                            job.status === "completed" ? "default" : 
-                            job.status === "running" ? "secondary" : 
-                            job.status === "failed" ? "destructive" : "outline"
-                          }>
+                          <Badge className={getJobStatusColor(job.status)}>
                             {job.status}
                           </Badge>
                         </div>
-                        
+
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                          <div>
-                            <p className="text-muted-foreground">Repository</p>
-                            <p className="font-medium">{job.githubRepo || "N/A"}</p>
-                          </div>
-                          <div>
-                            <p className="text-muted-foreground">Workspace</p>
-                            <p className="font-medium">{job.workspaceName || "N/A"}</p>
-                          </div>
-                          <div>
-                            <p className="text-muted-foreground">User</p>
-                            <p className="font-medium">{job.username} ({job.fullName})</p>
-                          </div>
                           <div>
                             <p className="text-muted-foreground">Commit</p>
                             <p className="font-medium font-mono text-xs">{job.commitSha?.substring(0, 8) || "N/A"}</p>
                           </div>
+                          <div>
+                            <p className="text-muted-foreground">Status</p>
+                            <p className="font-medium">{job.status}</p>
+                          </div>
                         </div>
-                        
+
                         {job.commitMessage && (
                           <div className="mt-3 p-3 bg-muted rounded-md">
                             <p className="text-sm text-muted-foreground mb-1">Commit Message</p>
                             <p className="text-sm">{job.commitMessage}</p>
                           </div>
                         )}
-                        
+
                         <div className="mt-3 flex items-center gap-4 text-xs text-muted-foreground">
-                          <span>Created: {new Date(job.createdAt).toLocaleDateString()}</span>
-                          {job.startedAt && <span>Started: {new Date(job.startedAt).toLocaleDateString()}</span>}
-                          {job.completedAt && <span>Completed: {new Date(job.completedAt).toLocaleDateString()}</span>}
+                          <span>Created: {formatDate(job.createdAt)}</span>
+                          {job.startedAt && <span>Started: {formatDate(job.startedAt)}</span>}
+                          {job.completedAt && <span>Completed: {formatDate(job.completedAt)}</span>}
                         </div>
                       </div>
-                      
+
                       <div className="ml-4">
-                        <Button 
-                          variant="outline" 
+                        <Button
+                          variant="outline"
                           size="sm"
                           onClick={() => setLocation(`/jobs/${job.jobId}`)}
                         >
