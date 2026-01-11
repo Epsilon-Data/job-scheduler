@@ -19,7 +19,7 @@ export enum JobStatus {
 
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
-  githubId: varchar("github_id", { length: 255 }).unique().notNull(),
+  externalId: varchar("external_id", { length: 255 }).unique().notNull(),
   username: varchar("username", { length: 255 }).notNull(),
   email: varchar("email", { length: 255 }).notNull(),
   fullName: varchar("full_name", { length: 255 }),

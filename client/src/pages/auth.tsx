@@ -48,7 +48,7 @@ export default function Auth() {
           <CardContent className="pt-6">
             <Button
               className="w-full"
-              onClick={() => window.location.href = "/api/auth/github"}
+              onClick={() => window.location.href = "/api/auth/login"}
             >
               <Github className="mr-2 h-4 w-4" />
               Sign in with GitHub
