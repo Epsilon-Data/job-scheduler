@@ -1,12 +1,20 @@
 import { useAuth } from "@/hooks/use-auth";
+import { useGitHub } from "@/hooks/use-github";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Link, useLocation } from "wouter";
-import { LogOut, Github } from "lucide-react";
+import { LogOut, Github, Link2, Link2Off } from "lucide-react";
 
 export function Header() {
   const { user, logout, isLoggingOut } = useAuth();
+  const { isConnected, username, connect } = useGitHub();
   const [location] = useLocation();
 
   if (!user) return null;
@@ -50,6 +58,35 @@ export function Header() {
           </nav>
 
           <div className="flex items-center space-x-4">
+            {/* GitHub Connection Status */}
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  {isConnected ? (
+                    <div className="flex items-center text-green-600 px-2">
+                      <Github className="w-4 h-4 mr-1" />
+                      <Link2 className="w-3 h-3" />
+                    </div>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => connect()}
+                      className="text-muted-foreground hover:text-foreground"
+                    >
+                      <Github className="w-4 h-4 mr-1" />
+                      <Link2Off className="w-3 h-3" />
+                    </Button>
+                  )}
+                </TooltipTrigger>
+                <TooltipContent>
+                  {isConnected
+                    ? `GitHub connected as ${username}`
+                    : "Connect GitHub to access repositories"}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+
             <div className="flex items-center space-x-2">
               <Avatar className="w-8 h-8">
                 <AvatarImage src={user.avatarUrl || ""} alt={user.fullName || user.username} />

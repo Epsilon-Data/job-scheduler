@@ -1,7 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { storage } from "../storage";
 import type { User } from "@shared/schema";
-import { getGitHubBrokerToken } from "../keycloak";
 
 // Extend Express Request type to include session and user
 declare module "express-serve-static-core" {
@@ -11,7 +10,7 @@ declare module "express-serve-static-core" {
             accessToken?: string;  // GitHub access token (for repo access)
             apiToken?: string;     // Keycloak JWT (for identity)
             oauthState?: string;
-            githubConnectState?: string;
+            githubOAuthState?: string;  // State for GitHub OAuth flow
             destroy: (callback: (err: any) => void) => void;
             save: (callback: (err: any) => void) => void;
         };
@@ -85,7 +84,7 @@ export const requireStaff = async (
 
 /**
  * Middleware to require GitHub access token
- * Fetches the GitHub token from Keycloak broker API if not cached
+ * Loads token from session or database
  */
 export const requireGitHubToken = async (
     req: Request,
@@ -97,26 +96,23 @@ export const requireGitHubToken = async (
         return;
     }
 
-    // Check if we already have the GitHub token cached
+    // Check if we already have the GitHub token in session
     if (req.session.accessToken) {
         next();
         return;
     }
 
-    // Fetch GitHub token from Keycloak broker API
-    const apiToken = (req.session as any).apiToken;
-    if (!apiToken) {
-        res.status(401).json({ message: "No Keycloak token available" });
-        return;
-    }
-
-    const githubToken = await getGitHubBrokerToken(apiToken);
-    if (!githubToken) {
-        res.status(401).json({ message: "Failed to retrieve GitHub token. Please re-authenticate." });
+    // Try to load from database
+    const user = await storage.getUser(req.session.userId);
+    if (!user?.githubAccessToken) {
+        res.status(401).json({
+            message: "GitHub not connected",
+            code: "GITHUB_NOT_CONNECTED"
+        });
         return;
     }
 
     // Cache the GitHub token in session
-    req.session.accessToken = githubToken;
+    req.session.accessToken = user.githubAccessToken;
     next();
 };

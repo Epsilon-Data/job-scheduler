@@ -2,12 +2,11 @@ import { Router } from "express";
 import { storage } from "../storage";
 import { approvalRequestSchema } from "@shared/schema";
 import { asyncHandler } from "../middleware";
-import { getGitHubBrokerToken } from "../keycloak";
 
 const router = Router();
 
 /**
- * Keycloak OAuth initiation (with GitHub IdP)
+ * Keycloak OAuth initiation (SSO)
  * GET /api/auth/login
  */
 router.get("/login", asyncHandler(async (req, res) => {
@@ -24,8 +23,7 @@ router.get("/login", asyncHandler(async (req, res) => {
             res.status(500).json({ message: "Failed to initialize OAuth flow" });
             return;
         }
-        // kc_idp_hint=github auto-redirects to GitHub IdP
-        const authUrl = `${keycloakAuthUrl}?client_id=${keycloakClientId}&redirect_uri=${encodeURIComponent(keycloakRedirectUri)}&response_type=code&scope=openid profile email&state=${state}&kc_idp_hint=github`;
+        const authUrl = `${keycloakAuthUrl}?client_id=${keycloakClientId}&redirect_uri=${encodeURIComponent(keycloakRedirectUri)}&response_type=code&scope=openid profile email&state=${state}`;
         res.redirect(authUrl);
     });
 }));
@@ -50,7 +48,7 @@ router.get("/callback", asyncHandler(async (req, res) => {
     }
 
     const keycloakTokenUrl = process.env.KEYCLOAK_TOKEN_URL || "http://localhost:8080/realms/epsilon/protocol/openid-connect/token";
-    const keycloakClientId = process.env.KEYCLOAK_CLIENT_ID || "coordinator-oauth";
+    const keycloakClientId = process.env.KEYCLOAK_CLIENT_ID || "jobscheduler-oauth";
     const keycloakClientSecret = process.env.KEYCLOAK_CLIENT_SECRET;
     const keycloakRedirectUri = process.env.KEYCLOAK_REDIRECT_URI || "http://localhost:3005/api/auth/callback";
 
@@ -134,15 +132,6 @@ router.get("/callback", asyncHandler(async (req, res) => {
     // Store JWT token in session
     req.session.userId = user.id;
     (req.session as any).apiToken = jwt;
-
-    // Try to get GitHub broker token
-    const githubToken = await getGitHubBrokerToken(jwt);
-    if (githubToken) {
-        console.log("GitHub broker token retrieved successfully!");
-        req.session.accessToken = githubToken;
-    } else {
-        console.log("Could not retrieve GitHub broker token");
-    }
 
     // Redirect based on approval status
     if (user.approvalStatus === "pending") {
