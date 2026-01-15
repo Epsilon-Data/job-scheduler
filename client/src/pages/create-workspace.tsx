@@ -1,4 +1,5 @@
 import { useAuth } from "@/hooks/use-auth";
+import { useGitHub } from "@/hooks/use-github";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,7 +11,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Info } from "lucide-react";
+import { Info, Github } from "lucide-react";
 import { useLocation } from "wouter";
 import { insertWorkspaceSchema, type InsertWorkspace } from "@shared/schema";
 import { z } from "zod";
@@ -41,6 +42,7 @@ type CreateWorkspaceForm = z.infer<typeof createWorkspaceSchema>;
 
 export default function CreateWorkspace() {
   const { user } = useAuth();
+  const { isConnected, isLoading: isGitHubLoading, connect } = useGitHub();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
@@ -94,6 +96,45 @@ export default function CreateWorkspace() {
       });
     },
   });
+
+  // Show GitHub connection prompt if not connected
+  if (!isGitHubLoading && !isConnected) {
+    return (
+      <div className="min-h-screen bg-background">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="mb-8">
+            <h1 className="text-3xl font-bold text-foreground">Create New Workspace</h1>
+            <p className="mt-2 text-muted-foreground">
+              Set up a new research workspace with GitHub integration
+            </p>
+          </div>
+
+          <Card>
+            <CardContent className="p-8">
+              <div className="text-center py-8">
+                <Github className="h-16 w-16 mx-auto text-muted-foreground mb-4" />
+                <h2 className="text-xl font-semibold text-foreground mb-2">
+                  Connect GitHub to Continue
+                </h2>
+                <p className="text-muted-foreground mb-6 max-w-md mx-auto">
+                  To create a workspace, you need to connect your GitHub account so we can access your repositories.
+                </p>
+                <div className="flex justify-center gap-4">
+                  <Button variant="outline" onClick={() => setLocation("/dashboard")}>
+                    Cancel
+                  </Button>
+                  <Button onClick={() => connect("/workspaces/new")}>
+                    <Github className="mr-2 h-4 w-4" />
+                    Connect GitHub
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">

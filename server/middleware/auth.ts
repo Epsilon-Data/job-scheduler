@@ -7,10 +7,12 @@ declare module "express-serve-static-core" {
     interface Request {
         session: {
             userId?: string;
-            accessToken?: string;
-            apiToken?: string;
+            accessToken?: string;  // GitHub access token (for repo access)
+            apiToken?: string;     // Keycloak JWT (for identity)
             oauthState?: string;
+            githubOAuthState?: string;  // State for GitHub OAuth flow
             destroy: (callback: (err: any) => void) => void;
+            save: (callback: (err: any) => void) => void;
         };
         user?: User;
     }
@@ -82,16 +84,35 @@ export const requireStaff = async (
 
 /**
  * Middleware to require GitHub access token
- * Must be used after requireAuth
+ * Loads token from session or database
  */
 export const requireGitHubToken = async (
     req: Request,
     res: Response,
     next: NextFunction
 ): Promise<void> => {
-    if (!req.session.userId || !req.session.accessToken) {
+    if (!req.session.userId) {
         res.status(401).json({ message: "Not authenticated" });
         return;
     }
+
+    // Check if we already have the GitHub token in session
+    if (req.session.accessToken) {
+        next();
+        return;
+    }
+
+    // Try to load from database
+    const user = await storage.getUser(req.session.userId);
+    if (!user?.githubAccessToken) {
+        res.status(401).json({
+            message: "GitHub not connected",
+            code: "GITHUB_NOT_CONNECTED"
+        });
+        return;
+    }
+
+    // Cache the GitHub token in session
+    req.session.accessToken = user.githubAccessToken;
     next();
 };

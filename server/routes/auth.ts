@@ -1,92 +1,31 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { approvalRequestSchema } from "@shared/schema";
-import { githubApi } from "../github";
 import { asyncHandler } from "../middleware";
 
 const router = Router();
 
 /**
- * GitHub OAuth initiation
- * GET /api/auth/github
+ * Keycloak OAuth initiation (SSO)
+ * GET /api/auth/login
  */
-router.get("/github", asyncHandler(async (req, res) => {
-    const clientId = process.env.GITHUB_CLIENT_ID;
-    if (!clientId) {
-        res.status(500).json({ message: "GitHub OAuth not configured" });
-        return;
-    }
+router.get("/login", asyncHandler(async (req, res) => {
+    const keycloakAuthUrl = process.env.KEYCLOAK_AUTH_URL || "http://localhost:8080/realms/epsilon/protocol/openid-connect/auth";
+    const keycloakClientId = process.env.KEYCLOAK_CLIENT_ID || "jobscheduler-oauth";
+    const keycloakRedirectUri = process.env.KEYCLOAK_REDIRECT_URI || "http://localhost:3005/api/auth/callback";
 
-    const redirectUri = process.env.GITHUB_REDIRECT_URI;
-    const scope = "user:email,read:user,repo";
     const state = Math.random().toString(36).substring(2, 15);
-
-    // Store state in session for CSRF protection
     req.session.oauthState = state;
 
-    // Explicitly save session before redirect to ensure state is persisted
     req.session.save((err) => {
         if (err) {
             console.error("Failed to save session:", err);
             res.status(500).json({ message: "Failed to initialize OAuth flow" });
             return;
         }
-        const githubUrl = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri || "")}&scope=${scope}&state=${state}`;
-        res.redirect(githubUrl);
+        const authUrl = `${keycloakAuthUrl}?client_id=${keycloakClientId}&redirect_uri=${encodeURIComponent(keycloakRedirectUri)}&response_type=code&scope=openid profile email&state=${state}`;
+        res.redirect(authUrl);
     });
-}));
-
-/**
- * GitHub OAuth callback
- * GET /api/auth/github/callback
- */
-router.get("/github/callback", asyncHandler(async (req, res) => {
-    const { code, state } = req.query;
-
-    if (!code) {
-        res.status(400).json({ message: "No authorization code received" });
-        return;
-    }
-
-    // Validate OAuth state to prevent CSRF attacks
-    if (!state || state !== req.session.oauthState) {
-        console.warn("OAuth state mismatch - CSRF attack prevented");
-        res.status(403).json({ message: "Invalid OAuth state. Please try logging in again." });
-        return;
-    }
-
-    // Clear the OAuth state after validation
-    delete req.session.oauthState;
-
-    const { accessToken, user: githubUser } = await githubApi.exchangeCodeForToken(code as string);
-
-    // Check if user exists, create if not
-    let user = await storage.getUserByGithubId(githubUser.id.toString());
-
-    if (!user) {
-        user = await storage.createUser({
-            githubId: githubUser.id.toString(),
-            username: githubUser.login,
-            email: githubUser.email || "",
-            fullName: githubUser.name || "",
-            avatarUrl: githubUser.avatar_url || "",
-            role: "user",
-            approvalStatus: "pending"
-        });
-    }
-
-    // Store user in session
-    req.session.userId = user.id;
-    req.session.accessToken = accessToken;
-
-    // Redirect based on approval status
-    if (user.approvalStatus === "pending") {
-        res.redirect("/approval-request");
-    } else if (user.approvalStatus === "approved") {
-        res.redirect("/dashboard");
-    } else {
-        res.redirect("/auth?error=rejected");
-    }
 }));
 
 /**
@@ -109,7 +48,7 @@ router.get("/callback", asyncHandler(async (req, res) => {
     }
 
     const keycloakTokenUrl = process.env.KEYCLOAK_TOKEN_URL || "http://localhost:8080/realms/epsilon/protocol/openid-connect/token";
-    const keycloakClientId = process.env.KEYCLOAK_CLIENT_ID || "coordinator-oauth";
+    const keycloakClientId = process.env.KEYCLOAK_CLIENT_ID || "jobscheduler-oauth";
     const keycloakClientSecret = process.env.KEYCLOAK_CLIENT_SECRET;
     const keycloakRedirectUri = process.env.KEYCLOAK_REDIRECT_URI || "http://localhost:3005/api/auth/callback";
 
@@ -164,6 +103,9 @@ router.get("/callback", asyncHandler(async (req, res) => {
         return;
     }
 
+    // Log JWT payload for debugging
+    console.log("JWT Payload:", JSON.stringify(payload, null, 2));
+
     const keycloakUser = {
         id: String(payload.preferred_username || payload.upn || ""),
         login: String(payload.preferred_username || payload.upn || ""),
@@ -172,12 +114,12 @@ router.get("/callback", asyncHandler(async (req, res) => {
         avatar_url: String(payload.picture || "")
     };
 
-    // Check if user exists in database
-    let user = await storage.getUserByGithubId(keycloakUser.id);
+    // Check if user exists in database by email
+    let user = await storage.getUserByEmail(keycloakUser.email);
 
     if (!user) {
         user = await storage.createUser({
-            githubId: keycloakUser.id,
+            externalId: String(payload.sub),
             username: keycloakUser.login,
             email: keycloakUser.email,
             fullName: keycloakUser.name,
@@ -187,7 +129,7 @@ router.get("/callback", asyncHandler(async (req, res) => {
         });
     }
 
-    // Store JWT token and user info in session
+    // Store JWT token in session
     req.session.userId = user.id;
     (req.session as any).apiToken = jwt;
 

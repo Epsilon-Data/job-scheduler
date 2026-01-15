@@ -40,7 +40,8 @@ export interface JobRequestWithWorkspace extends JobRequest {
 export interface IStorage {
   // User methods
   getUser(id: string): Promise<User | undefined>;
-  getUserByGithubId(githubId: string): Promise<User | undefined>;
+  getUserByExternalId(externalId: string): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: string, updates: Partial<User>): Promise<User>;
   getAllUsers(): Promise<User[]>;
@@ -75,8 +76,13 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
-  async getUserByGithubId(githubId: string): Promise<User | undefined> {
-    const [user] = await db.select().from(users).where(eq(users.githubId, githubId));
+  async getUserByExternalId(externalId: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.externalId, externalId));
+    return user;
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.email, email));
     return user;
   }
 
