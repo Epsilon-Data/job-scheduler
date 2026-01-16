@@ -17,6 +17,11 @@ if (!process.env.SESSION_SECRET) {
 }
 
 const app = express();
+
+// Trust proxy - required when behind reverse proxy (nginx, load balancer, etc.)
+// This allows secure cookies to work properly over HTTPS
+app.set('trust proxy', 1);
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
