@@ -95,6 +95,7 @@ router.get("/jobs/:jobId", requireAuth, asyncHandler(async (req, res) => {
         validation_status: jobRequest.validationStatus,
         validation_policy: jobRequest.validationPolicy,
         validation_decision: jobRequest.validationDecision,
+        attestation: jobRequest.attestation,
         ai_enabled: jobRequest.aiEnabled,
         zkp_enabled: jobRequest.zkpEnabled,
         detailed_logs: detailedLogs,

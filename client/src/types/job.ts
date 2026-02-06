@@ -1,5 +1,26 @@
 // Job-related type definitions
 
+export interface AttestationData {
+  attestation: {
+    attestation_document: string;
+    attestation_document_length: number;
+    format: string;
+    signed_by: string;
+    user_data_included: boolean;
+    user_data_hash?: string;
+    nonce_included: boolean;
+    how_to_verify: string[];
+    aws_root_cert_url: string;
+  };
+  proof: {
+    job_id: string;
+    output_hash: string;
+    timestamp: number;
+    nonce: string;
+  };
+  verification_guide: Record<string, string>;
+}
+
 export interface ZKPData {
   proof: unknown;
   publicSignals: unknown;

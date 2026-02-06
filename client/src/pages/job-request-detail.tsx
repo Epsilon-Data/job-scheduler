@@ -18,6 +18,7 @@ import {
   ErrorDetailsCard,
   ExecutionOutputCard,
   ZKPCard,
+  AttestationCard,
   ResultMetadataCard,
   CodeViolationsCard,
   AIAnalysisLogsCard,
@@ -134,6 +135,9 @@ export default function JobRequestDetail({ params }: JobRequestDetailProps) {
 
         {/* ZKP Information - only show if ZKP was enabled for this job */}
         {zkpEnabled && <ZKPCard jobRequest={jobRequest} />}
+
+        {/* Enclave Attestation - shows if attestation exists (null for old jobs) */}
+        <AttestationCard jobRequest={jobRequest} />
 
         {/* Result Metadata - displays parsed result_metadata JSON */}
         <ResultMetadataCard jobRequest={jobRequest} />
