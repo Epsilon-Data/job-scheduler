@@ -5,6 +5,7 @@ export { JobProgressCard } from './JobProgressCard';
 export { ErrorDetailsCard } from './ErrorDetailsCard';
 export { ExecutionOutputCard } from './ExecutionOutputCard';
 export { ZKPCard } from './ZKPCard';
+export { AttestationCard } from './AttestationCard';
 export { ResultMetadataCard } from './ResultMetadataCard';
 export { CodeViolationsCard } from './CodeViolationsCard';
 export { AIAnalysisLogsCard, AIAnalysisResultsCard } from './AIAnalysisCard';

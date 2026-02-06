@@ -78,6 +78,7 @@ export const jobRequests = pgTable("job_requests", {
   validationStatus: varchar("validation_status", { length: 50 }),
   validationPolicy: text("validation_policy"),
   validationDecision: text("validation_decision"),
+  attestation: text("attestation"), // JSON: enclave attestation document
   aiLogs: text("ai_logs"), // Store AI analysis logs
   aiEnabled: boolean("ai_enabled").notNull().default(true), // Whether AI agent is enabled for this job
   zkpEnabled: boolean("zkp_enabled").notNull().default(true), // Whether ZKP is enabled for this job
