@@ -3,12 +3,13 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Download } from "lucide-react";
+import { Download, ShieldCheck } from "lucide-react";
 import { Link } from "wouter";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { getJobStatusColor } from "@/lib/status-utils";
 import type { JobRequest } from "@shared/schema";
 import type { AIAnalysisResult } from "@/types/job";
+import { API_CONFIG } from "@/lib/constants";
 
 // Import all job detail components
 import {
@@ -109,10 +110,22 @@ export default function JobRequestDetail({ params }: JobRequestDetailProps) {
                 {jobRequest.status}
               </Badge>
               {jobRequest.status === "completed" && (
-                <Button variant="outline">
-                  <Download className="mr-2 h-4 w-4" />
-                  Download Results
-                </Button>
+                <>
+                  <a
+                    href={`${API_CONFIG.TRUST_CENTER_URL}/verify/${jobRequest.jobId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <Button variant="outline">
+                      <ShieldCheck className="mr-2 h-4 w-4" />
+                      Verify on Trust Center
+                    </Button>
+                  </a>
+                  <Button variant="outline">
+                    <Download className="mr-2 h-4 w-4" />
+                    Download Results
+                  </Button>
+                </>
               )}
             </div>
           </div>
