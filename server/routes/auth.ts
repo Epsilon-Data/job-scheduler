@@ -2,6 +2,7 @@ import { Router } from "express";
 import { storage } from "../storage";
 import { approvalRequestSchema } from "@shared/schema";
 import { asyncHandler } from "../middleware";
+import { registerSession, getExpressSessionId, unregisterSession, unregisterByExpressSession } from "../sessionTracker";
 
 const router = Router();
 
@@ -129,9 +130,16 @@ router.get("/callback", asyncHandler(async (req, res) => {
         });
     }
 
-    // Store JWT token in session
+    // Store tokens in session
     req.session.userId = user.id;
     (req.session as any).apiToken = jwt;
+    (req.session as any).idToken = tokenData.id_token || "";
+
+    // Register Keycloak session for backchannel logout
+    const sid = payload.sid as string | undefined;
+    if (sid) {
+      registerSession(sid, req.sessionID);
+    }
 
     // Redirect based on approval status
     if (user.approvalStatus === "pending") {
@@ -144,17 +152,75 @@ router.get("/callback", asyncHandler(async (req, res) => {
 }));
 
 /**
- * Logout
+ * Logout — destroys local session and returns Keycloak logout URL
  * POST /api/auth/logout
  */
 router.post("/logout", (req, res) => {
+    const idToken = (req.session as any)?.idToken || "";
+    const clientId = process.env.KEYCLOAK_CLIENT_ID || "jobscheduler-oauth";
+    const logoutBaseUrl = process.env.KEYCLOAK_LOGOUT_URL
+        || (process.env.KEYCLOAK_AUTH_URL || "").replace("/auth", "/logout");
+    const postLogoutRedirect = process.env.KEYCLOAK_POST_LOGOUT_REDIRECT_URI
+        || "http://localhost:3005/auth";
+
+    // Unregister backchannel session mapping
+    unregisterByExpressSession(req.sessionID);
+
     req.session.destroy((err: Error | null) => {
         if (err) {
             res.status(500).json({ message: "Failed to logout" });
             return;
         }
-        res.json({ message: "Logged out successfully" });
+
+        const params = new URLSearchParams({ client_id: clientId });
+        if (idToken) {
+            params.set("id_token_hint", idToken);
+        }
+        params.set("post_logout_redirect_uri", postLogoutRedirect);
+
+        res.json({ logoutUrl: `${logoutBaseUrl}?${params.toString()}` });
     });
+});
+
+/**
+ * Backchannel logout — Keycloak sends a POST with logout_token when a user
+ * logs out from another app. We destroy the matching Express session.
+ * POST /api/auth/backchannel-logout
+ */
+router.post("/backchannel-logout", (req, res) => {
+    const logoutToken = req.body?.logout_token;
+    if (!logoutToken) {
+        res.status(400).json({ error: "Missing logout_token" });
+        return;
+    }
+
+    try {
+        const parts = logoutToken.split(".");
+        if (parts.length !== 3) {
+            res.status(400).json({ error: "Invalid logout_token format" });
+            return;
+        }
+        const payload = JSON.parse(Buffer.from(parts[1], "base64").toString());
+        const sid = payload.sid;
+        if (!sid) {
+            res.status(400).json({ error: "No sid in logout_token" });
+            return;
+        }
+
+        const expressSessionId = getExpressSessionId(sid);
+        if (expressSessionId && req.sessionStore) {
+            req.sessionStore.destroy(expressSessionId, (err) => {
+                if (err) console.error("[Backchannel] Failed to destroy session:", err);
+            });
+            unregisterSession(sid);
+            console.log(`[Backchannel] Destroyed session for Keycloak sid=${sid}`);
+        }
+
+        res.status(200).send();
+    } catch (err) {
+        console.error("[Backchannel] Error processing logout_token:", err);
+        res.status(400).json({ error: "Failed to process logout_token" });
+    }
 });
 
 /**

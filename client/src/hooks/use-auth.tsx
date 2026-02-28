@@ -1,10 +1,14 @@
+import { useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import type { User } from "@shared/schema";
 
 export function useAuth() {
   const queryClient = useQueryClient();
-  
+  const [, setLocation] = useLocation();
+  const wasAuthenticated = useRef(false);
+
   const { data: user, isLoading, error } = useQuery<User | null>({
     queryKey: ["/api/auth/me"],
     queryFn: async () => {
@@ -21,16 +25,33 @@ export function useAuth() {
         return null;
       }
     },
+    refetchInterval: 30_000,
   });
+
+  // Redirect to auth page when session is lost (backchannel logout)
+  useEffect(() => {
+    if (user) {
+      wasAuthenticated.current = true;
+    } else if (wasAuthenticated.current && !isLoading) {
+      wasAuthenticated.current = false;
+      setLocation("/auth");
+    }
+  }, [user, isLoading, setLocation]);
 
   const logoutMutation = useMutation({
     mutationFn: async () => {
-      await apiRequest("POST", "/api/auth/logout");
+      const response = await apiRequest("POST", "/api/auth/logout");
+      return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: { logoutUrl?: string }) => {
       queryClient.setQueryData(["/api/auth/me"], null);
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-      window.location.href = "/";
+      // Redirect to Keycloak logout to end SSO session
+      if (data?.logoutUrl) {
+        window.location.href = data.logoutUrl;
+      } else {
+        window.location.href = "/";
+      }
     },
   });
 

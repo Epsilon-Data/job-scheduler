@@ -52,16 +52,27 @@ export default function UserDashboard() {
   const pagination = jobsResponse?.pagination;
   const jobStats = jobsResponse?.stats;
 
-  if (user?.approvalStatus !== "approved") {
+  if (!user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4" />
+          <p className="text-muted-foreground">Redirecting to sign in...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (user.approvalStatus !== "approved") {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <Card className="w-full max-w-md mx-4">
           <CardContent className="pt-6 text-center">
             <h2 className="text-2xl font-bold text-foreground mb-4">
-              {user?.approvalStatus === "pending" ? "Approval Pending" : "Access Denied"}
+              {user.approvalStatus === "pending" ? "Approval Pending" : "Access Denied"}
             </h2>
             <p className="text-muted-foreground">
-              {user?.approvalStatus === "pending"
+              {user.approvalStatus === "pending"
                 ? "Your access request is being reviewed by our staff."
                 : "Your access request has been denied. Please contact support for more information."}
             </p>
