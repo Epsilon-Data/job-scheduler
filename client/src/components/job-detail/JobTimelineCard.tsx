@@ -133,8 +133,8 @@ function TimelineEntry({ log }: { log: JobLog }) {
 }
 
 function BasicTimeline({ jobRequest }: { jobRequest: JobRequest }) {
-  const relevantStatuses = ['ai_analyzing', 'ai_approved', 'ai_rejected', 'running', 'completed', 'failed'];
-  const pastAIAnalysis = ['running', 'completed', 'failed'].includes(jobRequest.status);
+  const relevantStatuses = ['ai_analyzing', 'ai_approved', 'ai_rejected', 'running', 'success', 'failed'];
+  const pastAIAnalysis = ['running', 'success', 'failed'].includes(jobRequest.status);
 
   return (
     <div className="space-y-1">
@@ -176,7 +176,7 @@ function BasicTimeline({ jobRequest }: { jobRequest: JobRequest }) {
       )}
 
       {/* Job Completed */}
-      {jobRequest.status === "completed" && jobRequest.completedAt && (
+      {jobRequest.status === "success" && jobRequest.completedAt && (
         <>
           <div className="text-green-400">
             {formatDateTime(jobRequest.completedAt)} SUCCESS: Job completed successfully

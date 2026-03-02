@@ -55,7 +55,7 @@ const STEP_CONFIG: Record<string, StepConfig> = {
   encryption_error: { phase: 4, label: "Encryption Error", icon: "❌", color: "#EF4444", progress: 85, isError: true },
   enclave_execution: { phase: 4, label: "Running in Enclave", icon: "🏃", color: "#6366F1", progress: 90 },
   enclave_execution_error: { phase: 4, label: "Enclave Error", icon: "❌", color: "#EF4444", progress: 90, isError: true },
-  completed: { phase: 4, label: "Completed", icon: "🎉", color: "#10B981", progress: 100, terminal: true },
+  success: { phase: 4, label: "Completed", icon: "🎉", color: "#10B981", progress: 100, terminal: true },
 
   // === ERROR STATES ===
   rejected: { phase: 4, label: "Rejected", icon: "🚫", color: "#EF4444", progress: 100, terminal: true, isError: true },
@@ -64,7 +64,7 @@ const STEP_CONFIG: Record<string, StepConfig> = {
   error: { phase: 0, label: "Error", icon: "❌", color: "#EF4444", progress: 100, terminal: true, isError: true },
 };
 
-const TERMINAL_STATES = ['completed', 'failed', 'rejected', 'ai_rejected', 'execution_failed'];
+const TERMINAL_STATES = ['success', 'failed', 'rejected', 'ai_rejected', 'execution_failed'];
 
 interface ProgressStep {
   stepType: string;
@@ -167,7 +167,7 @@ function getFallbackSteps(jobRequest: JobRequest, aiEnabled: boolean): ProgressS
   });
 
   // Clone step
-  const cloneComplete = ['ai_analyzing', 'ai_approved', 'ai_rejected', 'running', 'completed', 'failed'].includes(status);
+  const cloneComplete = ['ai_analyzing', 'ai_approved', 'ai_rejected', 'running', 'success', 'failed'].includes(status);
   steps.push({
     stepType: 'cloned',
     stepName: 'Clone Repository',
@@ -178,7 +178,7 @@ function getFallbackSteps(jobRequest: JobRequest, aiEnabled: boolean): ProgressS
 
   // AI Analysis step (only if enabled)
   if (aiEnabled) {
-    const aiComplete = ['running', 'completed', 'failed'].includes(status);
+    const aiComplete = ['running', 'success', 'failed'].includes(status);
     const aiFailed = status === 'ai_rejected';
     steps.push({
       stepType: aiFailed ? 'ai_rejected' : 'ai_approved',
@@ -190,12 +190,12 @@ function getFallbackSteps(jobRequest: JobRequest, aiEnabled: boolean): ProgressS
   }
 
   // Execution step
-  const execComplete = status === 'completed';
+  const execComplete = status === 'success';
   const execFailed = status === 'failed';
   steps.push({
-    stepType: execFailed ? 'execution_failed' : execComplete ? 'completed' : 'execution_start',
+    stepType: execFailed ? 'execution_failed' : execComplete ? 'success' : 'execution_start',
     stepName: 'Execute Code',
-    config: STEP_CONFIG[execFailed ? 'execution_failed' : execComplete ? 'completed' : 'execution_start'],
+    config: STEP_CONFIG[execFailed ? 'execution_failed' : execComplete ? 'success' : 'execution_start'],
     status: execFailed ? 'failed' : execComplete ? 'complete' : status === 'running' ? 'active' : 'pending',
     message: execFailed ? 'Execution failed' : execComplete ? 'Executed successfully' : 'Waiting to execute...',
   });

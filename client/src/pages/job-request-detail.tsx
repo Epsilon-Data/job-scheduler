@@ -109,7 +109,7 @@ export default function JobRequestDetail({ params }: JobRequestDetailProps) {
               <Badge className={getJobStatusColor(jobRequest.status)}>
                 {jobRequest.status}
               </Badge>
-              {jobRequest.status === "completed" && (
+              {jobRequest.status === "success" && (
                 <>
                   <a
                     href={`${API_CONFIG.TRUST_CENTER_URL}/verify/${jobRequest.jobId}`}

@@ -14,7 +14,7 @@ interface AIAnalysisCardProps {
 export function AIAnalysisLogsCard({ jobRequest }: { jobRequest: JobRequest }) {
   const [isExpanded, setIsExpanded] = useState(false);
 
-  const relevantStatuses = ['ai_analyzing', 'ai_approved', 'ai_rejected', 'running', 'completed', 'failed'];
+  const relevantStatuses = ['ai_analyzing', 'ai_approved', 'ai_rejected', 'running', 'success', 'failed'];
   if (!relevantStatuses.includes(jobRequest.status)) {
     return null;
   }
@@ -181,7 +181,7 @@ function SimulatedLogs({ status, jobId }: { status: string; jobId: string }) {
     );
   }
 
-  if (['running', 'completed', 'failed'].includes(status)) {
+  if (['running', 'success', 'failed'].includes(status)) {
     return (
       <div className="space-y-2">
         <div className="text-blue-400">🤖 {currentTime} INFO: AI analysis completed successfully</div>
