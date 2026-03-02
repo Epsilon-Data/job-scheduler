@@ -1,5 +1,5 @@
 export type JobStatus =
-  | "completed"
+  | "success"
   | "running"
   | "failed"
   | "queued"
@@ -11,7 +11,7 @@ export type JobStatus =
 export type ApprovalStatus = "approved" | "pending" | "rejected";
 
 export const JOB_STATUS_COLORS: Record<JobStatus, string> = {
-  completed: "bg-green-100 text-green-800",
+  success: "bg-green-100 text-green-800",
   running: "bg-blue-100 text-blue-800",
   failed: "bg-red-100 text-red-800",
   queued: "bg-yellow-100 text-yellow-800",
@@ -22,7 +22,7 @@ export const JOB_STATUS_COLORS: Record<JobStatus, string> = {
 } as const;
 
 export const JOB_STATUS_DOT_COLORS: Record<string, string> = {
-  completed: "bg-green-500",
+  success: "bg-green-500",
   running: "bg-blue-500",
   failed: "bg-red-500",
   queued: "bg-yellow-500",

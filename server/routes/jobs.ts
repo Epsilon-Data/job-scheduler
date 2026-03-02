@@ -58,7 +58,7 @@ router.get("/jobs/:jobId", requireAuth, asyncHandler(async (req, res) => {
     let calculatedDuration = jobRequest.durationSeconds;
     let calculatedCompletedAt = jobRequest.completedAt;
 
-    if (!calculatedDuration && jobRequest.status === "completed") {
+    if (!calculatedDuration && jobRequest.status === "success") {
         const startTime = jobRequest.startedAt || jobRequest.createdAt;
         const endTime = jobRequest.completedAt || jobRequest.updatedAt;
         if (startTime && endTime) {
@@ -69,7 +69,7 @@ router.get("/jobs/:jobId", requireAuth, asyncHandler(async (req, res) => {
         }
     }
 
-    if (!calculatedCompletedAt && jobRequest.status === "completed" && jobRequest.updatedAt) {
+    if (!calculatedCompletedAt && jobRequest.status === "success" && jobRequest.updatedAt) {
         calculatedCompletedAt = jobRequest.updatedAt;
     }
 

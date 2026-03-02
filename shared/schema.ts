@@ -10,7 +10,7 @@ export enum JobStatus {
   AI_APPROVED = "ai_approved", 
   AI_REJECTED = "ai_rejected",
   RUNNING = "running", 
-  COMPLETED = "completed",
+  COMPLETED = "success",
   FAILED = "failed",
   VALIDATING = "validating",
   VALIDATED = "validated",

@@ -160,7 +160,7 @@ export class DatabaseStorage implements IStorage {
       .select({
         workspaceId: jobRequests.workspaceId,
         total: count(),
-        completed: sql<number>`COUNT(*) FILTER (WHERE ${jobRequests.status} = 'completed')`,
+        completed: sql<number>`COUNT(*) FILTER (WHERE ${jobRequests.status} = 'success')`,
         running: sql<number>`COUNT(*) FILTER (WHERE ${jobRequests.status} = 'running')`,
         failed: sql<number>`COUNT(*) FILTER (WHERE ${jobRequests.status} = 'failed')`,
         pending: sql<number>`COUNT(*) FILTER (WHERE ${jobRequests.status} IN ('pending', 'queued'))`,
@@ -247,7 +247,7 @@ export class DatabaseStorage implements IStorage {
     const [statsResult] = await db
       .select({
         total: count(),
-        completed: sql<number>`COUNT(*) FILTER (WHERE ${jobRequests.status} = 'completed')`,
+        completed: sql<number>`COUNT(*) FILTER (WHERE ${jobRequests.status} = 'success')`,
         running: sql<number>`COUNT(*) FILTER (WHERE ${jobRequests.status} = 'running')`,
         failed: sql<number>`COUNT(*) FILTER (WHERE ${jobRequests.status} = 'failed')`,
         pending: sql<number>`COUNT(*) FILTER (WHERE ${jobRequests.status} = 'pending')`,
