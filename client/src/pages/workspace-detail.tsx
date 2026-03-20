@@ -249,12 +249,7 @@ export default function WorkspaceDetail({ params }: WorkspaceDetailProps) {
                                 View Details
                               </Button>
                             </Link>
-                            {job.status === "success" && (
-                              <Button size="sm" variant="ghost">
-                                <Download className="mr-1 h-3 w-3" />
-                                Download
-                              </Button>
-                            )}
+                            {/* Download removed — results available in job detail */}
                             {(job.status === "running" || job.status === "queued") && (
                               <Button size="sm" variant="ghost">
                                 <X className="mr-1 h-3 w-3" />

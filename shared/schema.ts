@@ -82,6 +82,10 @@ export const jobRequests = pgTable("job_requests", {
   aiLogs: text("ai_logs"), // Store AI analysis logs
   aiEnabled: boolean("ai_enabled").notNull().default(true), // Whether AI agent is enabled for this job
   zkpEnabled: boolean("zkp_enabled").notNull().default(true), // Whether ZKP is enabled for this job
+  executionMetrics: text("execution_metrics"), // JSON: per-step timing + ai_decision
+  verificationReceipt: text("verification_receipt"), // JSON: server-side verification result
+  enclaveVersion: text("enclave_version"),
+  enclavePcr0: text("enclave_pcr0"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
