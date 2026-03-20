@@ -15,6 +15,10 @@ RUN npm ci
 # Copy source code (excluding files in .dockerignore)
 COPY . .
 
+# Build-time env vars for Vite client
+ARG VITE_TRUST_CENTER_URL
+ENV VITE_TRUST_CENTER_URL=${VITE_TRUST_CENTER_URL}
+
 # Build the application
 RUN npm run build
 
