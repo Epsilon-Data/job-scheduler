@@ -324,8 +324,8 @@ function AttestationSummary({ jobRequest }: { jobRequest: JobRequest }) {
 function AIAnalysisSection({ jobRequest }: { jobRequest: JobRequest }) {
   const [showLogs, setShowLogs] = useState(false);
   const aiLogs = jobRequest.ai_logs || jobRequest.aiLogs;
-  const validationStatus = jobRequest.validationStatus || jobRequest.validation_status;
-  const validationDecision = jobRequest.validationDecision || jobRequest.validation_decision;
+  const validationStatus = jobRequest.validationStatus || (jobRequest as any).validation_status;
+  const validationDecision = jobRequest.validationDecision || (jobRequest as any).validation_decision;
 
   const confidence = validationStatus ? parseFloat(validationStatus) : null;
   const isError = validationDecision?.startsWith('AI analysis error');
