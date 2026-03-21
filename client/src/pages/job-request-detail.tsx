@@ -253,20 +253,23 @@ function AttestationSummary({ jobRequest }: { jobRequest: JobRequest }) {
   if (!attestation?.attestation) return null;
 
   const doc = attestation.attestation;
+  const proof = attestation.proof;
   const isLocal = doc.is_local === true;
 
-  // Parse user_data from the attestation document to show hashes
-  let userData: Record<string, string> = {};
-  try {
-    // The user_data is inside the CBOR document — we'll show what the executor stored
-    const receipt = safeJsonParse<any>(
-      typeof (jobRequest as any).verification_receipt === 'string'
-        ? (jobRequest as any).verification_receipt : null, null
-    );
-    if (receipt?.user_data) {
-      userData = receipt.user_data;
-    }
-  } catch {}
+  // Parse user_data JSON from attestation (contains script_hash, dataset_hash, output_hash)
+  const userData = safeJsonParse<any>(
+    typeof doc.user_data === 'string' ? doc.user_data : null, null
+  );
+
+  // Parse verification_receipt and execution_metrics from job
+  const receipt = safeJsonParse<any>(
+    typeof (jobRequest as any).verification_receipt === 'string'
+      ? (jobRequest as any).verification_receipt : null, null
+  );
+  const metrics = safeJsonParse<any>(
+    typeof (jobRequest as any).execution_metrics === 'string'
+      ? (jobRequest as any).execution_metrics : null, null
+  );
 
   return (
     <Card className="mb-6">
@@ -281,31 +284,186 @@ function AttestationSummary({ jobRequest }: { jobRequest: JobRequest }) {
           </Badge>
         </div>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="space-y-4">
+        {/* Core attestation info */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
           <div>
             <span className="text-muted-foreground">Module ID</span>
             <p className="font-mono text-xs truncate">{doc.module_id}</p>
           </div>
-          {userData.script_hash && (
+          {doc.format && (
             <div>
-              <span className="text-muted-foreground">Script Hash</span>
-              <p className="font-mono text-xs truncate">{userData.script_hash}</p>
+              <span className="text-muted-foreground">Format</span>
+              <p className="font-mono text-xs">{doc.format}</p>
             </div>
           )}
-          {userData.output_hash && (
+          {doc.signed_by && (
             <div>
-              <span className="text-muted-foreground">Output Hash</span>
-              <p className="font-mono text-xs truncate">{userData.output_hash}</p>
+              <span className="text-muted-foreground">Signed By</span>
+              <p className="font-mono text-xs">{doc.signed_by}</p>
             </div>
           )}
-          {userData.dataset_hash && (
+          {doc.attestation_document_length && (
             <div>
-              <span className="text-muted-foreground">Dataset Hash</span>
-              <p className="font-mono text-xs truncate">{userData.dataset_hash}</p>
+              <span className="text-muted-foreground">Document Size</span>
+              <p className="font-mono text-xs">{doc.attestation_document_length} bytes</p>
             </div>
           )}
         </div>
+
+        {/* PCR Values */}
+        {(receipt?.pcrs || doc.pcrs) && (
+          <>
+            <div className="border-t pt-3">
+              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">PCR Values (Enclave Measurements)</span>
+            </div>
+            <div className="grid grid-cols-1 gap-2 text-sm">
+              {['pcr0', 'pcr1', 'pcr2'].map((pcr) => {
+                const value = receipt?.pcrs?.[pcr] || doc.pcrs?.[pcr];
+                if (!value) return null;
+                return (
+                  <div key={pcr}>
+                    <span className="text-muted-foreground uppercase text-xs">{pcr}</span>
+                    <p className="font-mono text-xs break-all">{value}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        {/* Execution Proof — hashes from user_data */}
+        <>
+          <div className="border-t pt-3">
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Execution Proof</span>
+          </div>
+          <div className="grid grid-cols-1 gap-3 text-sm">
+            {(userData?.script_hash || proof?.script_hash) && (
+              <div>
+                <span className="text-muted-foreground">Script Hash (SHA-256)</span>
+                <p className="font-mono text-xs break-all">{userData?.script_hash || proof?.script_hash}</p>
+              </div>
+            )}
+            {(userData?.dataset_hash || proof?.dataset_hash) && (
+              <div>
+                <span className="text-muted-foreground">Dataset Hash (SHA-256)</span>
+                <p className="font-mono text-xs break-all">{userData?.dataset_hash || proof?.dataset_hash}</p>
+              </div>
+            )}
+            {(userData?.output_hash || proof?.output_hash) && (
+              <div>
+                <span className="text-muted-foreground">Output Hash (SHA-256)</span>
+                <p className="font-mono text-xs break-all">{userData?.output_hash || proof?.output_hash}</p>
+              </div>
+            )}
+            {(userData?.timestamp || proof?.timestamp) && (
+              <div>
+                <span className="text-muted-foreground">Timestamp</span>
+                <p className="font-mono text-xs">
+                  {userData?.timestamp || (proof?.timestamp ? new Date(proof.timestamp * 1000).toISOString() : '')}
+                </p>
+              </div>
+            )}
+            {(userData?.nonce || proof?.nonce) && (
+              <div>
+                <span className="text-muted-foreground">Nonce</span>
+                <p className="font-mono text-xs break-all">{userData?.nonce || proof?.nonce}</p>
+              </div>
+            )}
+          </div>
+        </>
+
+        {/* Server Verification Receipt */}
+        {receipt && (
+          <>
+            <div className="border-t pt-3">
+              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Server Verification</span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-sm">
+              {Object.entries(receipt.checks || {}).map(([check, passed]) => (
+                <div key={check} className="flex items-center gap-1.5">
+                  {passed ? (
+                    <CheckCircle className="h-3.5 w-3.5 text-green-600" />
+                  ) : (
+                    <X className="h-3.5 w-3.5 text-red-500" />
+                  )}
+                  <span className="text-xs">{check.replace(/_/g, ' ')}</span>
+                </div>
+              ))}
+            </div>
+            {receipt.error && (
+              <p className="text-xs text-amber-600 bg-amber-50 rounded px-3 py-1.5">{receipt.error}</p>
+            )}
+            {receipt.timing && (
+              <p className="text-xs text-muted-foreground">
+                Verified in {receipt.timing.total_ms?.toFixed(0)}ms (parse: {receipt.timing.parse_ms?.toFixed(0)}ms, cert chain: {receipt.timing.cert_chain_ms?.toFixed(0)}ms)
+              </p>
+            )}
+          </>
+        )}
+
+        {/* Execution Metrics */}
+        {metrics && (
+          <>
+            <div className="border-t pt-3">
+              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Execution Metrics</span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-sm">
+              {metrics.fetch_middleware_ms != null && (
+                <div>
+                  <span className="text-muted-foreground text-xs">Data Fetch</span>
+                  <p className="font-mono text-xs">{(metrics.fetch_middleware_ms / 1000).toFixed(2)}s</p>
+                </div>
+              )}
+              {metrics.zip_and_encrypt_ms != null && (
+                <div>
+                  <span className="text-muted-foreground text-xs">Encrypt</span>
+                  <p className="font-mono text-xs">{metrics.zip_and_encrypt_ms.toFixed(0)}ms</p>
+                </div>
+              )}
+              {metrics.enclave_round_trip_ms != null && (
+                <div>
+                  <span className="text-muted-foreground text-xs">Enclave Execution</span>
+                  <p className="font-mono text-xs">{metrics.enclave_round_trip_ms.toFixed(0)}ms</p>
+                </div>
+              )}
+              {metrics.total_ms != null && (
+                <div>
+                  <span className="text-muted-foreground text-xs">Total</span>
+                  <p className="font-mono text-xs">{(metrics.total_ms / 1000).toFixed(2)}s</p>
+                </div>
+              )}
+              {metrics.ai_decision && (
+                <div>
+                  <span className="text-muted-foreground text-xs">AI Decision</span>
+                  <Badge variant="outline" className="text-xs">{metrics.ai_decision.replace(/_/g, ' ')}</Badge>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* Raw attestation document */}
+        {doc.attestation_document && (
+          <>
+            <div className="border-t pt-3">
+              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Raw Attestation Document (Base64)</span>
+            </div>
+            <div className="relative">
+              <pre className="bg-muted rounded px-3 py-2 text-xs font-mono break-all whitespace-pre-wrap max-h-32 overflow-y-auto">
+                {doc.attestation_document}
+              </pre>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="absolute top-1 right-1 h-6 text-xs"
+                onClick={() => navigator.clipboard.writeText(doc.attestation_document)}
+              >
+                Copy
+              </Button>
+            </div>
+          </>
+        )}
 
         {isLocal && (
           <p className="text-xs text-muted-foreground bg-muted rounded px-3 py-2">
