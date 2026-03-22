@@ -729,17 +729,38 @@ function AIAnalysisSection({ jobRequest }: { jobRequest: JobRequest }) {
                   </button>
                   {showLogs && (
                     <div className="mt-2 space-y-1 bg-muted/50 rounded-lg p-3">
-                      {detailedLogs.map((log, i) => (
-                        <div key={i} className="flex items-start gap-2 text-xs py-0.5">
-                          <span className="text-muted-foreground shrink-0 w-16">
-                            {new Date(log.created_at || log.createdAt || '').toLocaleTimeString()}
-                          </span>
-                          <Badge variant="outline" className="text-[10px] shrink-0">
-                            {log.step_type || log.stepType}
-                          </Badge>
-                          <span className="text-foreground">{log.message}</span>
-                        </div>
-                      ))}
+                      {detailedLogs.map((log, i) => {
+                        const stepType = log.step_type || log.stepType;
+                        const isCrewTask = stepType === 'ai_crew_task';
+                        const agentMatch = isCrewTask ? log.message.match(/^\[([^\]]+)\]\s*(.*)/) : null;
+                        const agentName = agentMatch ? agentMatch[1] : null;
+                        const agentMessage = agentMatch ? agentMatch[2] : log.message;
+
+                        return (
+                          <div key={i} className={`text-xs py-1 ${isCrewTask ? 'border-l-2 border-blue-200 pl-2 my-1' : 'flex items-start gap-2 py-0.5'}`}>
+                            <div className="flex items-center gap-2">
+                              <span className="text-muted-foreground shrink-0 w-16">
+                                {new Date(log.created_at || log.createdAt || '').toLocaleTimeString()}
+                              </span>
+                              <Badge variant="outline" className="text-[10px] shrink-0">
+                                {stepType}
+                              </Badge>
+                              {agentName && (
+                                <Badge className="text-[10px] bg-blue-100 text-blue-800 border-blue-200">
+                                  {agentName}
+                                </Badge>
+                              )}
+                            </div>
+                            {isCrewTask ? (
+                              <p className="text-foreground mt-1 whitespace-pre-wrap leading-relaxed max-h-40 overflow-y-auto">
+                                {agentMessage}
+                              </p>
+                            ) : (
+                              <span className="text-foreground">{log.message}</span>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
