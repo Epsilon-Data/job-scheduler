@@ -236,7 +236,8 @@ function ExecutionOutput({ jobRequest }: { jobRequest: JobRequest }) {
     );
     if (attestation?.attestation?.attestation_document) {
       const decoded = atob(attestation.attestation.attestation_document);
-      const start = decoded.indexOf('{"job_id"');
+      let start = decoded.indexOf('{"job_id"');
+      if (start < 0) start = decoded.indexOf('{"dataset_hash"');
       if (start >= 0) {
         let depth = 0, end = start;
         for (let i = start; i < decoded.length; i++) {
@@ -320,7 +321,8 @@ function AttestationSummary({ jobRequest }: { jobRequest: JobRequest }) {
   try {
     if (doc.attestation_document) {
       const decoded = atob(doc.attestation_document);
-      const start = decoded.indexOf('{"job_id"');
+      let start = decoded.indexOf('{"job_id"');
+      if (start < 0) start = decoded.indexOf('{"dataset_hash"');
       if (start >= 0) {
         let depth = 0, end = start;
         for (let i = start; i < decoded.length; i++) {
