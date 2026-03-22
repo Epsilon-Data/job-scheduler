@@ -369,7 +369,7 @@ function AttestationSummary({ jobRequest }: { jobRequest: JobRequest }) {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
           <div>
             <span className="text-muted-foreground">Module ID</span>
-            <p className="font-mono text-xs truncate">{doc.module_id}</p>
+            <p className="font-mono text-xs truncate">{doc.module_id || receipt?.module_id || ''}</p>
           </div>
           {doc.format && (
             <div>
