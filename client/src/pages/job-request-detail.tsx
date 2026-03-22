@@ -732,12 +732,12 @@ function AIAnalysisSection({ jobRequest }: { jobRequest: JobRequest }) {
                       {detailedLogs.map((log, i) => {
                         const stepType = log.step_type || log.stepType;
                         const isCrewTask = stepType === 'ai_crew_task';
-                        const agentMatch = isCrewTask ? log.message.match(/^\[([^\]]+)\]\s*(.*)/) : null;
+                        const agentMatch = isCrewTask ? log.message.match(/^\[([^\]]+)\]\s*([\s\S]*)/) : null;
                         const agentName = agentMatch ? agentMatch[1] : null;
                         const agentMessage = agentMatch ? agentMatch[2] : log.message;
 
                         return (
-                          <div key={i} className={`text-xs py-1 ${isCrewTask ? 'border-l-2 border-blue-200 pl-2 my-1' : 'flex items-start gap-2 py-0.5'}`}>
+                          <div key={i} className={`text-xs py-1 ${isCrewTask ? 'border-l-2 border-blue-200 pl-2 my-2' : 'flex items-start gap-2 py-0.5'}`}>
                             <div className="flex items-center gap-2">
                               <span className="text-muted-foreground shrink-0 w-16">
                                 {new Date(log.created_at || log.createdAt || '').toLocaleTimeString()}
@@ -752,9 +752,9 @@ function AIAnalysisSection({ jobRequest }: { jobRequest: JobRequest }) {
                               )}
                             </div>
                             {isCrewTask ? (
-                              <p className="text-foreground mt-1 whitespace-pre-wrap leading-relaxed max-h-40 overflow-y-auto">
-                                {agentMessage}
-                              </p>
+                              <pre className="text-foreground mt-1 whitespace-pre-wrap leading-relaxed text-xs font-sans max-h-60 overflow-y-auto bg-background/50 rounded p-2">
+                                {agentMessage.trim()}
+                              </pre>
                             ) : (
                               <span className="text-foreground">{log.message}</span>
                             )}
