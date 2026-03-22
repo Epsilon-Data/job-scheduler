@@ -94,7 +94,7 @@ function JobHeader({ jobRequest }: { jobRequest: JobRequest }) {
             >
               <Button variant="outline" size="sm">
                 <ShieldCheck className="mr-2 h-4 w-4" />
-                Verify on Trust Center
+                Verify on Trust Hub
               </Button>
             </a>
           )}
