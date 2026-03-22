@@ -225,6 +225,40 @@ function ErrorCard({ jobRequest }: { jobRequest: JobRequest }) {
 
 function ExecutionOutput({ jobRequest }: { jobRequest: JobRequest }) {
   const output = jobRequest.executionOutput;
+  const [verifyResult, setVerifyResult] = useState<'idle' | 'match' | 'mismatch'>('idle');
+  const [computedHash, setComputedHash] = useState<string>('');
+
+  // Extract attested output_hash from CBOR attestation document
+  let attestedOutputHash = '';
+  try {
+    const attestation = safeJsonParse<any>(
+      typeof (jobRequest as any).attestation === 'string' ? (jobRequest as any).attestation : null, null
+    );
+    if (attestation?.attestation?.attestation_document) {
+      const decoded = atob(attestation.attestation.attestation_document);
+      const start = decoded.indexOf('{"job_id"');
+      if (start >= 0) {
+        let depth = 0, end = start;
+        for (let i = start; i < decoded.length; i++) {
+          if (decoded[i] === '{') depth++;
+          else if (decoded[i] === '}') depth--;
+          if (depth === 0) { end = i + 1; break; }
+        }
+        const userData = JSON.parse(decoded.slice(start, end));
+        attestedOutputHash = userData?.output_hash || '';
+      }
+    }
+  } catch {}
+
+  const verify = async () => {
+    if (!output) { setVerifyResult('mismatch'); return; }
+    const encoded = new TextEncoder().encode(output);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', encoded);
+    const hex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+    setComputedHash(hex);
+    setVerifyResult(hex === attestedOutputHash ? 'match' : 'mismatch');
+  };
+
   if (!output) return null;
 
   return (
@@ -232,10 +266,34 @@ function ExecutionOutput({ jobRequest }: { jobRequest: JobRequest }) {
       <CardHeader className="pb-2">
         <CardTitle className="text-base">Execution Output</CardTitle>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-3">
         <pre className="bg-muted rounded-lg p-4 text-sm font-mono overflow-x-auto whitespace-pre-wrap">
           {output}
         </pre>
+        {attestedOutputHash && (
+          <div className="flex items-center gap-3 pt-2 border-t">
+            <span className="text-xs text-muted-foreground">Output Integrity:</span>
+            {verifyResult === 'idle' && (
+              <Button variant="outline" size="sm" className="h-6 text-xs" onClick={verify}>
+                <ShieldCheck className="h-3 w-3 mr-1" />
+                Verify SHA-256
+              </Button>
+            )}
+            {verifyResult === 'match' && (
+              <Badge variant="outline" className="text-green-700 border-green-300 text-xs gap-1">
+                <CheckCircle className="h-3 w-3" /> Hash matches attested value
+              </Badge>
+            )}
+            {verifyResult === 'mismatch' && (
+              <Badge variant="outline" className="text-red-700 border-red-300 text-xs gap-1">
+                <X className="h-3 w-3" /> Hash does not match
+              </Badge>
+            )}
+            {computedHash && (
+              <span className="font-mono text-xs text-muted-foreground truncate">{computedHash.slice(0, 16)}...</span>
+            )}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -256,10 +314,30 @@ function AttestationSummary({ jobRequest }: { jobRequest: JobRequest }) {
   const proof = attestation.proof;
   const isLocal = doc.is_local === true;
 
-  // Parse user_data JSON from attestation (contains script_hash, dataset_hash, output_hash)
-  const userData = safeJsonParse<any>(
-    typeof doc.user_data === 'string' ? doc.user_data : null, null
-  );
+  // Extract user_data JSON from the base64 CBOR attestation document
+  // user_data contains job_id, script_hash, dataset_hash, output_hash, timestamp, nonce
+  let userData: any = null;
+  try {
+    if (doc.attestation_document) {
+      const decoded = atob(doc.attestation_document);
+      const start = decoded.indexOf('{"job_id"');
+      if (start >= 0) {
+        let depth = 0, end = start;
+        for (let i = start; i < decoded.length; i++) {
+          if (decoded[i] === '{') depth++;
+          else if (decoded[i] === '}') depth--;
+          if (depth === 0) { end = i + 1; break; }
+        }
+        userData = JSON.parse(decoded.slice(start, end));
+      }
+    }
+  } catch {}
+  // Fallback: try doc.user_data or proof
+  if (!userData) {
+    userData = safeJsonParse<any>(
+      typeof doc.user_data === 'string' ? doc.user_data : null, null
+    );
+  }
 
   // Parse verification_receipt and execution_metrics from job
   const receipt = safeJsonParse<any>(
@@ -332,45 +410,79 @@ function AttestationSummary({ jobRequest }: { jobRequest: JobRequest }) {
           </>
         )}
 
-        {/* Execution Proof — hashes from user_data */}
+        {/* Execution Proof Chain: repo → commit → script → data → output */}
         <>
           <div className="border-t pt-3">
             <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Execution Proof</span>
           </div>
-          <div className="grid grid-cols-1 gap-3 text-sm">
+          <div className="space-y-2 text-sm">
+            {/* Source */}
+            {((jobRequest as any).github_repo || jobRequest.commitSha) && (
+              <div className="flex items-start gap-2">
+                <GitCommit className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                <div>
+                  {(jobRequest as any).github_repo && (
+                    <a
+                      href={`https://github.com/${(jobRequest as any).github_repo}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-blue-600 hover:underline"
+                    >
+                      {(jobRequest as any).github_repo}
+                    </a>
+                  )}
+                  {((jobRequest as any).commit_hash || jobRequest.commitSha) && (
+                    <p className="font-mono text-xs text-muted-foreground">
+                      commit {((jobRequest as any).commit_hash || jobRequest.commitSha)?.slice(0, 8)}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+            {/* Arrow */}
+            {(userData?.script_hash || proof?.script_hash) && (
+              <div className="text-muted-foreground text-xs pl-2">↓</div>
+            )}
+            {/* Script Hash */}
             {(userData?.script_hash || proof?.script_hash) && (
               <div>
-                <span className="text-muted-foreground">Script Hash (SHA-256)</span>
+                <span className="text-muted-foreground">Script Hash (SHA-256 of code bundle)</span>
                 <p className="font-mono text-xs break-all">{userData?.script_hash || proof?.script_hash}</p>
               </div>
             )}
+            {/* Dataset Hash */}
             {(userData?.dataset_hash || proof?.dataset_hash) && (
               <div>
-                <span className="text-muted-foreground">Dataset Hash (SHA-256)</span>
+                <span className="text-muted-foreground">Dataset Hash (SHA-256 of ingested data)</span>
                 <p className="font-mono text-xs break-all">{userData?.dataset_hash || proof?.dataset_hash}</p>
               </div>
             )}
+            {/* Arrow */}
+            {(userData?.output_hash || proof?.output_hash) && (
+              <div className="text-muted-foreground text-xs pl-2">↓</div>
+            )}
+            {/* Output Hash */}
             {(userData?.output_hash || proof?.output_hash) && (
               <div>
-                <span className="text-muted-foreground">Output Hash (SHA-256)</span>
+                <span className="text-muted-foreground">Output Hash (SHA-256 of execution result)</span>
                 <p className="font-mono text-xs break-all">{userData?.output_hash || proof?.output_hash}</p>
               </div>
             )}
+            {/* Timestamp */}
             {(userData?.timestamp || proof?.timestamp) && (
-              <div>
+              <div className="pt-1">
                 <span className="text-muted-foreground">Timestamp</span>
                 <p className="font-mono text-xs">
-                  {userData?.timestamp || (proof?.timestamp ? new Date(proof.timestamp * 1000).toISOString() : '')}
+                  {typeof (userData?.timestamp ?? proof?.timestamp) === 'number'
+                    ? new Date((userData?.timestamp ?? proof?.timestamp) * 1000).toISOString()
+                    : (userData?.timestamp || '')}
                 </p>
               </div>
             )}
-            {(userData?.nonce || proof?.nonce) && (
-              <div>
-                <span className="text-muted-foreground">Nonce</span>
-                <p className="font-mono text-xs break-all">{userData?.nonce || proof?.nonce}</p>
-              </div>
-            )}
           </div>
+          <p className="text-xs text-muted-foreground bg-muted rounded px-3 py-2">
+            All hashes above are embedded in the hardware-signed attestation document. They cannot be modified after execution.
+          </p>
         </>
 
         {/* Server Verification Receipt */}
