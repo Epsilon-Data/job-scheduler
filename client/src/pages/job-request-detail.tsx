@@ -17,12 +17,20 @@ interface JobRequestDetailProps {
   params: { id: string };
 }
 
+const TERMINAL_STATUSES = new Set(["success", "failed", "rejected", "ai_rejected"]);
+const POLL_INTERVAL = 3000; // 3 seconds
+
 export default function JobRequestDetail({ params }: JobRequestDetailProps) {
   const { user } = useAuth();
   const jobId = params.id;
   const { data: jobRequest, isLoading, error } = useQuery<JobRequest>({
     queryKey: [`/api/jobs/${jobId}`],
     enabled: user?.approvalStatus === "approved",
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      if (!status || TERMINAL_STATUSES.has(status)) return false;
+      return POLL_INTERVAL;
+    },
   });
 
   if (isLoading) return <LoadingSpinner message="Loading job details..." />;
