@@ -17,8 +17,15 @@ interface JobRequestDetailProps {
   params: { id: string };
 }
 
-const TERMINAL_STATUSES = new Set(["success", "failed", "rejected", "ai_rejected"]);
-const POLL_INTERVAL = 3000; // 3 seconds
+const POLL_INTERVAL = 10000; // 10 seconds
+
+function isFullyComplete(job: JobRequest): boolean {
+  const terminalStatuses = ["success", "failed", "rejected", "ai_rejected"];
+  const statusDone = terminalStatuses.includes(job.status);
+  const aiEnabled = job.ai_enabled ?? job.aiEnabled ?? false;
+  const aiDone = !aiEnabled || !!(job.validation_decision ?? job.validationDecision);
+  return statusDone && aiDone;
+}
 
 export default function JobRequestDetail({ params }: JobRequestDetailProps) {
   const { user } = useAuth();
@@ -27,8 +34,8 @@ export default function JobRequestDetail({ params }: JobRequestDetailProps) {
     queryKey: [`/api/jobs/${jobId}`],
     enabled: user?.approvalStatus === "approved",
     refetchInterval: (query) => {
-      const status = query.state.data?.status;
-      if (!status || TERMINAL_STATUSES.has(status)) return false;
+      const data = query.state.data;
+      if (!data || isFullyComplete(data)) return false;
       return POLL_INTERVAL;
     },
   });
