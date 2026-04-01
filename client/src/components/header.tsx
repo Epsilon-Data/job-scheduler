@@ -14,7 +14,7 @@ import { LogOut, Github, Link2, Link2Off } from "lucide-react";
 
 export function Header() {
   const { user, logout, isLoggingOut } = useAuth();
-  const { isConnected, username, connect } = useGitHub();
+  const { isConnected, username, connect, disconnect } = useGitHub();
   const [location] = useLocation();
 
   if (!user) return null;
@@ -63,10 +63,15 @@ export function Header() {
               <Tooltip>
                 <TooltipTrigger asChild>
                   {isConnected ? (
-                    <div className="flex items-center text-green-600 px-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => disconnect()}
+                      className="text-green-600 hover:text-red-600"
+                    >
                       <Github className="w-4 h-4 mr-1" />
                       <Link2 className="w-3 h-3" />
-                    </div>
+                    </Button>
                   ) : (
                     <Button
                       variant="ghost"
@@ -81,7 +86,7 @@ export function Header() {
                 </TooltipTrigger>
                 <TooltipContent>
                   {isConnected
-                    ? `GitHub connected as ${username}`
+                    ? `GitHub connected as ${username} — click to disconnect`
                     : "Connect GitHub to access repositories"}
                 </TooltipContent>
               </Tooltip>
