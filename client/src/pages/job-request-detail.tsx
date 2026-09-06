@@ -23,7 +23,7 @@ function isFullyComplete(job: JobRequest): boolean {
   const terminalStatuses = ["success", "failed", "rejected", "ai_rejected"];
   const statusDone = terminalStatuses.includes(job.status);
   const aiEnabled = job.ai_enabled ?? job.aiEnabled ?? false;
-  const aiDone = !aiEnabled || !!(job.validation_decision ?? job.validationDecision);
+  const aiDone = !aiEnabled || !!job.validationDecision;
   return statusDone && aiDone;
 }
 
