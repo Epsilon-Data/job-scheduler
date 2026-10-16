@@ -20,6 +20,7 @@ export function Header() {
   if (!user) return null;
 
   const isStaff = user.role === "staff";
+  const isReviewer = user.role === "reviewer";
   const navItems = [
     { href: "/dashboard", label: "Dashboard" },
     { href: "/workspaces", label: "Workspaces" },  
@@ -28,6 +29,11 @@ export function Header() {
 
   if (isStaff) {
     navItems.push({ href: "/staff", label: "Staff Dashboard" });
+  }
+
+  // Same check as requireReviewer on the server
+  if (isReviewer && user.approvalStatus === "approved") {
+    navItems.push({ href: "/review", label: "Review" });
   }
 
   return (
@@ -102,8 +108,8 @@ export function Header() {
               <span className="text-sm font-medium text-foreground">
                 {user.fullName || user.username}
               </span>
-              <Badge variant={isStaff ? "default" : "secondary"}>
-                {isStaff ? "Staff" : "User"}
+              <Badge variant={isStaff || isReviewer ? "default" : "secondary"}>
+                {isStaff ? "Staff" : isReviewer ? "Reviewer" : "User"}
               </Badge>
             </div>
             <Button

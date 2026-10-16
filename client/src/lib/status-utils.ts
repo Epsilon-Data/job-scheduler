@@ -1,3 +1,5 @@
+import type { JobRelease, ReleaseStatus } from "@shared/schema";
+
 export type JobStatus =
   | "success"
   | "running"
@@ -35,6 +37,25 @@ export function getJobStatusColor(status: string): string {
 
 export function getJobStatusDotColor(status: string): string {
   return JOB_STATUS_DOT_COLORS[status] || "bg-gray-500";
+}
+
+// Output-release gate: only held states get a badge
+export const RELEASE_STATUS_BADGES: Partial<Record<ReleaseStatus, { label: string; className: string }>> = {
+  pending: { label: "Awaiting review", className: "bg-amber-100 text-amber-800" },
+  withheld: { label: "Withheld", className: "bg-slate-200 text-slate-800" },
+};
+
+export function getReleaseStatusBadge(status: string | null | undefined) {
+  return (status && RELEASE_STATUS_BADGES[status as ReleaseStatus]) || null;
+}
+
+// Job responses carry the release status as release_status, releaseStatus or release.status
+export function getReleaseStatus(job: {
+  release_status?: ReleaseStatus | null;
+  releaseStatus?: ReleaseStatus | null;
+  release?: Pick<JobRelease, "status"> | null;
+}): ReleaseStatus | null {
+  return job.release_status ?? job.releaseStatus ?? job.release?.status ?? null;
 }
 
 export function getApprovalStatusVariant(status: ApprovalStatus): "default" | "secondary" | "destructive" {

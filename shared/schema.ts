@@ -17,6 +17,12 @@ export enum JobStatus {
   REJECTED = "rejected"
 }
 
+// Output-release gate: real-data output and error text stay held until a reviewer approves them
+export const RELEASE_STATUSES = ["pending", "released", "withheld", "not_required"] as const;
+export type ReleaseStatus = (typeof RELEASE_STATUSES)[number];
+
+export const HELD_ERROR_MESSAGE = "Execution failed. Error details are held until a reviewer approves their release.";
+
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
   externalId: varchar("external_id", { length: 255 }).unique().notNull(),
@@ -88,6 +94,31 @@ export const jobRequests = pgTable("job_requests", {
   enclavePcr0: text("enclave_pcr0"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+  // Output-release gate columns (coordinator alembic revision 7f3a9c2d1e4b)
+  releaseStatus: varchar("release_status", { length: 20, enum: RELEASE_STATUSES }),
+  aiDecision: varchar("ai_decision", { length: 32 }),
+  outputSha256: varchar("output_sha256", { length: 64 }),
+});
+
+// job_outputs and release_decisions are created by coordinator alembic revision 7f3a9c2d1e4b;
+// never run drizzle-kit push against a shared database.
+export const jobOutputs = pgTable("job_outputs", {
+  jobId: varchar("job_id", { length: 255 }).primaryKey().references(() => jobRequests.jobId, { onDelete: "cascade" }),
+  kind: varchar("kind", { length: 10, enum: ["result", "error"] }).notNull(),
+  content: text("content").notNull(),
+  contentSha256: varchar("content_sha256", { length: 64 }).notNull(),
+  attestedOutputHash: varchar("attested_output_hash", { length: 64 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const releaseDecisions = pgTable("release_decisions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  jobId: varchar("job_id", { length: 255 }).notNull().unique().references(() => jobRequests.jobId, { onDelete: "cascade" }),
+  decision: varchar("decision", { length: 10, enum: ["approve", "reject"] }).notNull(),
+  outputSha256: varchar("output_sha256", { length: 64 }).notNull(),
+  reviewerId: uuid("reviewer_id").notNull().references(() => users.id),
+  reason: text("reason"),
+  decidedAt: timestamp("decided_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const jobLogs = pgTable("job_logs", {
@@ -170,6 +201,9 @@ export const insertJobRequestSchema = createInsertSchema(jobRequests).omit({
   validationStatus: true,
   validationPolicy: true,
   validationDecision: true,
+  releaseStatus: true,
+  aiDecision: true,
+  outputSha256: true,
 });
 
 export const jobUpdateSchema = z.object({
@@ -196,6 +230,21 @@ export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type Workspace = typeof workspaces.$inferSelect;
 export type InsertWorkspace = z.infer<typeof insertWorkspaceSchema>;
+export type JobOutput = typeof jobOutputs.$inferSelect;
+export type ReleaseDecision = typeof releaseDecisions.$inferSelect;
+
+// Release state shown to researchers (no reviewer identity)
+export interface JobRelease {
+  status: ReleaseStatus | null;
+  decision: {
+    id: string;
+    decision: ReleaseDecision["decision"];
+    decided_at: string;
+    reason: string | null;
+    output_sha256: string | null; // null unless released
+  } | null;
+}
+
 // Log entry type for both snake_case (API) and camelCase (normalized)
 export interface JobLogEntry {
   id: string;
@@ -250,6 +299,9 @@ export type JobRequest = typeof jobRequests.$inferSelect & {
   error_message?: string;
   ai_enabled?: boolean;
   zkp_enabled?: boolean;
+  release_status?: ReleaseStatus | null;
+  ai_decision?: string | null;
+  release?: JobRelease;
   // Normalized camelCase fields (added by frontend normalizer)
   detailedLogs?: JobLogEntry[];
   codeViolations?: Array<{

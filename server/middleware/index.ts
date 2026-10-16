@@ -2,6 +2,7 @@ export {
     requireAuth,
     requireAuthWithUser,
     requireStaff,
+    requireReviewer,
     requireGitHubToken
 } from "./auth";
 

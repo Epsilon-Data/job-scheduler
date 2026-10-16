@@ -3,18 +3,23 @@ import {
   workspaces,
   jobRequests,
   jobLogs,
+  jobOutputs,
+  releaseDecisions,
   type User,
   type InsertUser,
   type Workspace,
   type InsertWorkspace,
   type JobRequest,
   type InsertJobRequest,
+  type JobOutput,
+  type ReleaseDecision,
   type PaginationParams,
   type PaginatedJobsResponse,
   type JobStats,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, and, count, sql, SQL } from "drizzle-orm";
+import { eq, desc, asc, and, or, count, sql, SQL, inArray, isNotNull } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 
 // Extended workspace type with job statistics
 export interface WorkspaceWithJobCounts extends Workspace {
@@ -36,6 +41,62 @@ export interface JobRequestWithWorkspace extends JobRequest {
     githubBranch: string;
   } | null;
 }
+
+export type ReviewJobFilter = "pending" | "decided" | "all";
+
+type PersonSummary = Pick<User, "id" | "username" | "fullName">;
+
+// Review queue row: never carries the held content
+export interface ReviewJobSummary {
+  job: Pick<JobRequest, "jobId" | "userId" | "status" | "releaseStatus" | "completedAt" | "aiDecision" | "executionMetrics">;
+  submitter: PersonSummary;
+  workspace: Pick<Workspace, "id" | "userId" | "name" | "githubRepo">;
+  output: { kind: JobOutput["kind"]; sizeBytes: number } | null;
+  decision: ReleaseDecision | null;
+  reviewer: PersonSummary | null;
+}
+
+export interface ReviewJobDetail extends Omit<ReviewJobSummary, "job" | "output"> {
+  job: ReviewJobSummary["job"] &
+    Pick<JobRequest, "commitSha" | "verificationReceipt" | "validationStatus" | "validationDecision">;
+  output: JobOutput | null;
+}
+
+export interface NewReleaseDecision {
+  jobId: string;
+  reviewerId: string;
+  decision: ReleaseDecision["decision"];
+  reason: string | null;
+  outputSha256: string;
+}
+
+export type ReleaseDecisionFailure =
+  | "not_found"
+  | "no_output"
+  | "own_job"
+  | "not_reviewer"
+  | "not_pending"
+  | "stale_output";
+
+export class ReleaseDecisionError extends Error {
+  reason: ReleaseDecisionFailure;
+
+  constructor(reason: ReleaseDecisionFailure) {
+    super(`Release decision refused: ${reason}`);
+    this.reason = reason;
+    this.name = "ReleaseDecisionError";
+  }
+}
+
+// SQLSTATEs raised by the release_decisions guard trigger, plus the one-decision-per-job unique constraint
+const RELEASE_GATE_SQLSTATES = new Map<string, ReleaseDecisionFailure>([
+  ["RG001", "own_job"],
+  ["RG002", "not_reviewer"],
+  ["RG003", "not_pending"],
+  ["RG004", "stale_output"],
+  ["RG005", "not_found"],
+  ["23505", "not_pending"],
+]);
 
 export interface IStorage {
   // User methods
@@ -67,6 +128,16 @@ export interface IStorage {
 
   // Job logs methods
   getJobLogs(jobId: string): Promise<any[]>;
+
+  // Output-release gate methods
+  getJobOutputs(jobIds: string[]): Promise<JobOutput[]>;
+  getReleaseDecisions(jobIds: string[]): Promise<ReleaseDecision[]>;
+  getReviewJobs(filter: ReviewJobFilter): Promise<ReviewJobSummary[]>;
+  getReviewJob(jobId: string): Promise<ReviewJobDetail | undefined>;
+  recordReleaseDecision(input: NewReleaseDecision): Promise<{
+    decision: ReleaseDecision;
+    releaseStatus: "released" | "withheld";
+  }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -358,6 +429,143 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(jobLogs).where(eq(jobLogs.jobId, jobId)).orderBy(jobLogs.createdAt);
   }
 
+  // Output-release gate methods
+  async getJobOutputs(jobIds: string[]): Promise<JobOutput[]> {
+    if (jobIds.length === 0) return [];
+    return db.select().from(jobOutputs).where(inArray(jobOutputs.jobId, jobIds));
+  }
+
+  async getReleaseDecisions(jobIds: string[]): Promise<ReleaseDecision[]> {
+    if (jobIds.length === 0) return [];
+    return db.select().from(releaseDecisions).where(inArray(releaseDecisions.jobId, jobIds));
+  }
+
+  async getReviewJobs(filter: ReviewJobFilter): Promise<ReviewJobSummary[]> {
+    const reviewers = alias(users, "reviewers");
+    const query = db
+      .select({
+        job: {
+          jobId: jobRequests.jobId,
+          userId: jobRequests.userId,
+          status: jobRequests.status,
+          releaseStatus: jobRequests.releaseStatus,
+          completedAt: jobRequests.completedAt,
+          aiDecision: jobRequests.aiDecision,
+          executionMetrics: jobRequests.executionMetrics,
+        },
+        submitter: { id: users.id, username: users.username, fullName: users.fullName },
+        workspace: {
+          id: workspaces.id,
+          userId: workspaces.userId,
+          name: workspaces.name,
+          githubRepo: workspaces.githubRepo,
+        },
+        output: {
+          kind: jobOutputs.kind,
+          sizeBytes: sql<number>`octet_length(${jobOutputs.content})`.mapWith(Number),
+        },
+        decision: releaseDecisions,
+        reviewer: { id: reviewers.id, username: reviewers.username, fullName: reviewers.fullName },
+      })
+      .from(jobRequests)
+      .innerJoin(users, eq(jobRequests.userId, users.id))
+      .innerJoin(workspaces, eq(jobRequests.workspaceId, workspaces.id))
+      .leftJoin(jobOutputs, eq(jobOutputs.jobId, jobRequests.jobId))
+      .leftJoin(releaseDecisions, eq(releaseDecisions.jobId, jobRequests.jobId))
+      .leftJoin(reviewers, eq(reviewers.id, releaseDecisions.reviewerId));
+
+    const pending = eq(jobRequests.releaseStatus, "pending");
+    const decided = isNotNull(releaseDecisions.id);
+    if (filter === "pending") {
+      return query.where(pending).orderBy(asc(jobRequests.completedAt));
+    }
+    if (filter === "decided") {
+      return query.where(decided).orderBy(desc(releaseDecisions.decidedAt));
+    }
+    return query.where(or(pending, decided)).orderBy(desc(jobRequests.completedAt));
+  }
+
+  async getReviewJob(jobId: string): Promise<ReviewJobDetail | undefined> {
+    const reviewers = alias(users, "reviewers");
+    const [row] = await db
+      .select({
+        job: {
+          jobId: jobRequests.jobId,
+          userId: jobRequests.userId,
+          status: jobRequests.status,
+          releaseStatus: jobRequests.releaseStatus,
+          completedAt: jobRequests.completedAt,
+          aiDecision: jobRequests.aiDecision,
+          executionMetrics: jobRequests.executionMetrics,
+          commitSha: jobRequests.commitSha,
+          verificationReceipt: jobRequests.verificationReceipt,
+          validationStatus: jobRequests.validationStatus,
+          validationDecision: jobRequests.validationDecision,
+        },
+        submitter: { id: users.id, username: users.username, fullName: users.fullName },
+        workspace: {
+          id: workspaces.id,
+          userId: workspaces.userId,
+          name: workspaces.name,
+          githubRepo: workspaces.githubRepo,
+        },
+        output: jobOutputs,
+        decision: releaseDecisions,
+        reviewer: { id: reviewers.id, username: reviewers.username, fullName: reviewers.fullName },
+      })
+      .from(jobRequests)
+      .innerJoin(users, eq(jobRequests.userId, users.id))
+      .innerJoin(workspaces, eq(jobRequests.workspaceId, workspaces.id))
+      .leftJoin(jobOutputs, eq(jobOutputs.jobId, jobRequests.jobId))
+      .leftJoin(releaseDecisions, eq(releaseDecisions.jobId, jobRequests.jobId))
+      .leftJoin(reviewers, eq(reviewers.id, releaseDecisions.reviewerId))
+      .where(eq(jobRequests.jobId, jobId));
+    return row;
+  }
+
+  /**
+   * Records a reviewer's decision and moves the job to released/withheld in one transaction.
+   * The rules are checked here first; the database triggers enforce them again.
+   */
+  async recordReleaseDecision(input: NewReleaseDecision): Promise<{
+    decision: ReleaseDecision;
+    releaseStatus: "released" | "withheld";
+  }> {
+    try {
+      return await db.transaction(async (tx) => {
+        const [job] = await tx
+          .select({
+            userId: jobRequests.userId,
+            workspaceOwnerId: workspaces.userId,
+            releaseStatus: jobRequests.releaseStatus,
+          })
+          .from(jobRequests)
+          .innerJoin(workspaces, eq(jobRequests.workspaceId, workspaces.id))
+          .where(eq(jobRequests.jobId, input.jobId))
+          .for("update", { of: jobRequests });
+        if (!job) throw new ReleaseDecisionError("not_found");
+        if (job.userId === input.reviewerId || job.workspaceOwnerId === input.reviewerId) {
+          throw new ReleaseDecisionError("own_job");
+        }
+
+        const [output] = await tx
+          .select({ contentSha256: jobOutputs.contentSha256 })
+          .from(jobOutputs)
+          .where(eq(jobOutputs.jobId, input.jobId));
+        if (!output) throw new ReleaseDecisionError("no_output");
+        if (job.releaseStatus !== "pending") throw new ReleaseDecisionError("not_pending");
+        if (output.contentSha256 !== input.outputSha256) throw new ReleaseDecisionError("stale_output");
+
+        const [decision] = await tx.insert(releaseDecisions).values(input).returning();
+        const releaseStatus = input.decision === "approve" ? "released" : "withheld";
+        await tx.update(jobRequests).set({ releaseStatus }).where(eq(jobRequests.jobId, input.jobId));
+        return { decision, releaseStatus };
+      });
+    } catch (error) {
+      const reason = RELEASE_GATE_SQLSTATES.get((error as { code?: string } | null)?.code ?? "");
+      throw reason ? new ReleaseDecisionError(reason) : error;
+    }
+  }
 }
 
 export const storage = new DatabaseStorage();

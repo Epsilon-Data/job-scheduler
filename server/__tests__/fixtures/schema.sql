@@ -1,0 +1,349 @@
+
+-- Name: job_outputs_guard(); Type: FUNCTION; Schema: public; Owner: -
+
+CREATE FUNCTION public.job_outputs_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    IF TG_OP = 'DELETE' AND pg_trigger_depth() > 1 THEN
+        RETURN OLD;
+    END IF;
+    IF EXISTS (SELECT 1 FROM release_decisions d WHERE d.job_id = OLD.job_id) THEN
+        RAISE EXCEPTION 'held output for job % is fixed after a release decision', OLD.job_id USING ERRCODE = 'RG011';
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
+END $$;
+
+-- Name: job_requests_release_guard(); Type: FUNCTION; Schema: public; Owner: -
+
+CREATE FUNCTION public.job_requests_release_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.release_status IN ('released', 'withheld') THEN
+            RAISE EXCEPTION 'job %: cannot be created with release status %', NEW.job_id, NEW.release_status
+                  USING ERRCODE = 'RG024';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    IF NEW.release_status IS NOT DISTINCT FROM OLD.release_status THEN
+        RETURN NEW;
+    END IF;
+    IF OLD.release_status IN ('released', 'withheld') THEN
+        RAISE EXCEPTION 'job %: release status % is final', OLD.job_id, OLD.release_status USING ERRCODE = 'RG020';
+    END IF;
+    IF OLD.release_status = 'pending' AND NEW.release_status IS DISTINCT FROM 'released'
+                                      AND NEW.release_status IS DISTINCT FROM 'withheld' THEN
+        RAISE EXCEPTION 'job %: a pending release can only become released or withheld', OLD.job_id
+              USING ERRCODE = 'RG023';
+    END IF;
+    IF NEW.release_status = 'released' AND NOT EXISTS (
+            SELECT 1 FROM release_decisions d WHERE d.job_id = NEW.job_id AND d.decision = 'approve') THEN
+        RAISE EXCEPTION 'job %: cannot be released without an approve decision', NEW.job_id USING ERRCODE = 'RG021';
+    END IF;
+    IF NEW.release_status = 'withheld' AND NOT EXISTS (
+            SELECT 1 FROM release_decisions d WHERE d.job_id = NEW.job_id AND d.decision = 'reject') THEN
+        RAISE EXCEPTION 'job %: cannot be withheld without a reject decision', NEW.job_id USING ERRCODE = 'RG022';
+    END IF;
+    RETURN NEW;
+END $$;
+
+-- Name: release_decisions_before_insert(); Type: FUNCTION; Schema: public; Owner: -
+
+CREATE FUNCTION public.release_decisions_before_insert() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    v_job_user       uuid;
+    v_ws_user        uuid;
+    v_release_status varchar;
+    v_reviewer_role  varchar;
+    v_content_sha    varchar;
+BEGIN
+    SELECT jr.user_id, w.user_id, jr.release_status
+      INTO v_job_user, v_ws_user, v_release_status
+      FROM job_requests jr
+      JOIN workspaces w ON w.id = jr.workspace_id
+     WHERE jr.job_id = NEW.job_id
+       FOR UPDATE OF jr;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'release decision: job % not found', NEW.job_id USING ERRCODE = 'RG005';
+    END IF;
+
+    IF NEW.reviewer_id = v_job_user OR NEW.reviewer_id = v_ws_user THEN
+        RAISE EXCEPTION 'release decision: a reviewer cannot decide on their own job' USING ERRCODE = 'RG001';
+    END IF;
+
+    SELECT role INTO v_reviewer_role FROM users WHERE id = NEW.reviewer_id;
+    IF v_reviewer_role IS DISTINCT FROM 'reviewer' THEN
+        RAISE EXCEPTION 'release decision: user % is not a reviewer', NEW.reviewer_id USING ERRCODE = 'RG002';
+    END IF;
+
+    IF v_release_status IS DISTINCT FROM 'pending' THEN
+        RAISE EXCEPTION 'release decision: job % is not pending release (%)', NEW.job_id, coalesce(v_release_status, 'null')
+              USING ERRCODE = 'RG003';
+    END IF;
+
+    SELECT content_sha256 INTO v_content_sha FROM job_outputs WHERE job_id = NEW.job_id FOR SHARE;
+    IF v_content_sha IS NULL OR v_content_sha <> NEW.output_sha256 THEN
+        RAISE EXCEPTION 'release decision: output hash does not match the held output' USING ERRCODE = 'RG004';
+    END IF;
+
+    RETURN NEW;
+END $$;
+
+-- Name: release_decisions_immutable(); Type: FUNCTION; Schema: public; Owner: -
+
+CREATE FUNCTION public.release_decisions_immutable() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    IF TG_OP = 'DELETE' AND pg_trigger_depth() > 1 THEN
+        RETURN OLD;
+    END IF;
+    RAISE EXCEPTION 'release decisions are append-only' USING ERRCODE = 'RG010';
+END $$;
+
+-- Name: job_logs; Type: TABLE; Schema: public; Owner: -
+
+CREATE TABLE public.job_logs (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    job_id character varying(255) NOT NULL,
+    worker_name character varying(100) NOT NULL,
+    step_name character varying(255) NOT NULL,
+    step_type character varying(50) NOT NULL,
+    level character varying(20) DEFAULT 'info'::character varying NOT NULL,
+    message text NOT NULL,
+    log_metadata jsonb,
+    progress integer,
+    duration_ms integer,
+    error_details jsonb,
+    parent_log_id uuid,
+    created_at timestamp without time zone DEFAULT now()
+);
+
+-- Name: job_outputs; Type: TABLE; Schema: public; Owner: -
+
+CREATE TABLE public.job_outputs (
+    job_id character varying(255) NOT NULL,
+    kind character varying(10) NOT NULL,
+    content text NOT NULL,
+    content_sha256 character varying(64) NOT NULL,
+    attested_output_hash character varying(64),
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT job_outputs_attested_output_hash_check CHECK (((attested_output_hash IS NULL) OR ((attested_output_hash)::text ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT job_outputs_content_sha256_check CHECK (((content_sha256)::text = encode(sha256(convert_to(content, 'UTF8'::name)), 'hex'::text))),
+    CONSTRAINT job_outputs_kind_check CHECK (((kind)::text = ANY ((ARRAY['result'::character varying, 'error'::character varying])::text[])))
+);
+
+-- Name: job_requests; Type: TABLE; Schema: public; Owner: -
+
+CREATE TABLE public.job_requests (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    job_id character varying(255) NOT NULL,
+    workspace_id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    commit_sha character varying(255) NOT NULL,
+    commit_message text,
+    commit_author character varying(255),
+    commit_date timestamp without time zone,
+    status character varying(50) DEFAULT 'queued'::character varying NOT NULL,
+    started_at timestamp without time zone,
+    completed_at timestamp without time zone,
+    duration_seconds integer,
+    exit_code integer,
+    error_message text,
+    logs text,
+    output_files jsonb,
+    result_metadata text,
+    execution_output text,
+    execution_error text,
+    execution_method character varying(100),
+    validation_status character varying(50),
+    validation_policy text,
+    validation_decision text,
+    attestation text,
+    ai_logs text,
+    ai_enabled boolean DEFAULT true NOT NULL,
+    zkp_enabled boolean DEFAULT true NOT NULL,
+    execution_metrics text,
+    verification_receipt text,
+    enclave_version text,
+    enclave_pcr0 text,
+    created_at timestamp without time zone DEFAULT now(),
+    updated_at timestamp without time zone DEFAULT now(),
+    job_id_committed character varying,
+    researcher_nonce character varying,
+    commitment_receipt text,
+    ha_receipt text,
+    release_status character varying(20),
+    ai_decision character varying(32),
+    output_sha256 character varying(64),
+    CONSTRAINT job_requests_output_sha256_check CHECK (((output_sha256 IS NULL) OR ((output_sha256)::text ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT job_requests_release_status_check CHECK (((release_status IS NULL) OR ((release_status)::text = ANY ((ARRAY['pending'::character varying, 'released'::character varying, 'withheld'::character varying, 'not_required'::character varying])::text[]))))
+);
+
+-- Name: release_decisions; Type: TABLE; Schema: public; Owner: -
+
+CREATE TABLE public.release_decisions (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    job_id character varying(255) NOT NULL,
+    decision character varying(10) NOT NULL,
+    output_sha256 character varying(64) NOT NULL,
+    reviewer_id uuid NOT NULL,
+    reason text,
+    decided_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT release_decisions_decision_check CHECK (((decision)::text = ANY ((ARRAY['approve'::character varying, 'reject'::character varying])::text[]))),
+    CONSTRAINT release_decisions_output_sha256_check CHECK (((output_sha256)::text ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT release_decisions_reason_required CHECK ((((decision)::text = 'approve'::text) OR ((reason IS NOT NULL) AND (length(btrim(reason)) > 0))))
+);
+
+-- Name: users; Type: TABLE; Schema: public; Owner: -
+
+CREATE TABLE public.users (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    external_id character varying(255) NOT NULL,
+    username character varying(255) NOT NULL,
+    email character varying(255) NOT NULL,
+    full_name character varying(255),
+    avatar_url text,
+    role character varying(50) DEFAULT 'user'::character varying NOT NULL,
+    approval_status character varying(50) DEFAULT 'pending'::character varying NOT NULL,
+    institution character varying(255),
+    research_purpose text,
+    expected_duration character varying(100),
+    github_access_token text,
+    github_username character varying(255),
+    created_at timestamp without time zone DEFAULT now(),
+    updated_at timestamp without time zone DEFAULT now(),
+    approved_at timestamp without time zone,
+    approved_by uuid
+);
+
+-- Name: workspaces; Type: TABLE; Schema: public; Owner: -
+
+CREATE TABLE public.workspaces (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    name character varying(255) NOT NULL,
+    description text,
+    user_id uuid NOT NULL,
+    github_repo character varying(255) NOT NULL,
+    github_branch character varying(255) NOT NULL,
+    status character varying(50) DEFAULT 'active'::character varying NOT NULL,
+    created_at timestamp without time zone DEFAULT now(),
+    updated_at timestamp without time zone DEFAULT now(),
+    last_commit_sha character varying(255),
+    last_commit_message text,
+    last_commit_author character varying(255),
+    last_commit_date timestamp without time zone
+);
+
+-- Name: job_logs job_logs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+
+ALTER TABLE ONLY public.job_logs
+    ADD CONSTRAINT job_logs_pkey PRIMARY KEY (id);
+
+-- Name: job_outputs job_outputs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+
+ALTER TABLE ONLY public.job_outputs
+    ADD CONSTRAINT job_outputs_pkey PRIMARY KEY (job_id);
+
+-- Name: job_requests job_requests_job_id_unique; Type: CONSTRAINT; Schema: public; Owner: -
+
+ALTER TABLE ONLY public.job_requests
+    ADD CONSTRAINT job_requests_job_id_unique UNIQUE (job_id);
+
+-- Name: job_requests job_requests_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+
+ALTER TABLE ONLY public.job_requests
+    ADD CONSTRAINT job_requests_pkey PRIMARY KEY (id);
+
+-- Name: release_decisions release_decisions_job_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+
+ALTER TABLE ONLY public.release_decisions
+    ADD CONSTRAINT release_decisions_job_id_key UNIQUE (job_id);
+
+-- Name: release_decisions release_decisions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+
+ALTER TABLE ONLY public.release_decisions
+    ADD CONSTRAINT release_decisions_pkey PRIMARY KEY (id);
+
+-- Name: users users_external_id_unique; Type: CONSTRAINT; Schema: public; Owner: -
+
+ALTER TABLE ONLY public.users
+    ADD CONSTRAINT users_external_id_unique UNIQUE (external_id);
+
+-- Name: users users_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+
+ALTER TABLE ONLY public.users
+    ADD CONSTRAINT users_pkey PRIMARY KEY (id);
+
+-- Name: workspaces workspaces_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+
+ALTER TABLE ONLY public.workspaces
+    ADD CONSTRAINT workspaces_pkey PRIMARY KEY (id);
+
+-- Name: ix_job_requests_job_id_committed; Type: INDEX; Schema: public; Owner: -
+
+CREATE INDEX ix_job_requests_job_id_committed ON public.job_requests USING btree (job_id_committed);
+
+-- Name: ix_job_requests_release_status; Type: INDEX; Schema: public; Owner: -
+
+CREATE INDEX ix_job_requests_release_status ON public.job_requests USING btree (release_status);
+
+-- Name: job_outputs job_outputs_guard; Type: TRIGGER; Schema: public; Owner: -
+
+CREATE TRIGGER job_outputs_guard BEFORE DELETE OR UPDATE ON public.job_outputs FOR EACH ROW EXECUTE FUNCTION public.job_outputs_guard();
+
+-- Name: job_requests job_requests_release_guard; Type: TRIGGER; Schema: public; Owner: -
+
+CREATE TRIGGER job_requests_release_guard BEFORE INSERT OR UPDATE ON public.job_requests FOR EACH ROW EXECUTE FUNCTION public.job_requests_release_guard();
+
+-- Name: release_decisions release_decisions_before_insert; Type: TRIGGER; Schema: public; Owner: -
+
+CREATE TRIGGER release_decisions_before_insert BEFORE INSERT ON public.release_decisions FOR EACH ROW EXECUTE FUNCTION public.release_decisions_before_insert();
+
+-- Name: release_decisions release_decisions_immutable; Type: TRIGGER; Schema: public; Owner: -
+
+CREATE TRIGGER release_decisions_immutable BEFORE DELETE OR UPDATE ON public.release_decisions FOR EACH ROW EXECUTE FUNCTION public.release_decisions_immutable();
+
+-- Name: job_logs job_logs_job_id_job_requests_job_id_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+
+ALTER TABLE ONLY public.job_logs
+    ADD CONSTRAINT job_logs_job_id_job_requests_job_id_fk FOREIGN KEY (job_id) REFERENCES public.job_requests(job_id) ON DELETE CASCADE;
+
+-- Name: job_outputs job_outputs_job_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+
+ALTER TABLE ONLY public.job_outputs
+    ADD CONSTRAINT job_outputs_job_id_fkey FOREIGN KEY (job_id) REFERENCES public.job_requests(job_id) ON DELETE CASCADE;
+
+-- Name: job_requests job_requests_user_id_users_id_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+
+ALTER TABLE ONLY public.job_requests
+    ADD CONSTRAINT job_requests_user_id_users_id_fk FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+-- Name: job_requests job_requests_workspace_id_workspaces_id_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+
+ALTER TABLE ONLY public.job_requests
+    ADD CONSTRAINT job_requests_workspace_id_workspaces_id_fk FOREIGN KEY (workspace_id) REFERENCES public.workspaces(id) ON DELETE CASCADE;
+
+-- Name: release_decisions release_decisions_job_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+
+ALTER TABLE ONLY public.release_decisions
+    ADD CONSTRAINT release_decisions_job_id_fkey FOREIGN KEY (job_id) REFERENCES public.job_requests(job_id) ON DELETE CASCADE;
+
+-- Name: release_decisions release_decisions_reviewer_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+
+ALTER TABLE ONLY public.release_decisions
+    ADD CONSTRAINT release_decisions_reviewer_id_fkey FOREIGN KEY (reviewer_id) REFERENCES public.users(id);
+
+-- Name: workspaces workspaces_user_id_users_id_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+
+ALTER TABLE ONLY public.workspaces
+    ADD CONSTRAINT workspaces_user_id_users_id_fk FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+

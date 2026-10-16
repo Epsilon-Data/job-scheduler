@@ -8,7 +8,8 @@ import { useToast } from "@/hooks/use-toast";
 import { Plus, Settings, Github, GitBranch, GitCommit, Eye, Download, X } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { LoadingSpinner } from "@/components/loading-spinner";
-import { getJobStatusColor } from "@/lib/status-utils";
+import { ReleaseStatusBadge } from "@/components/release-status-badge";
+import { getJobStatusColor, getReleaseStatus } from "@/lib/status-utils";
 import { formatDateTimeShort, formatDuration } from "@/lib/date-utils";
 import type { Workspace, JobRequest } from "@shared/schema";
 import { useState } from "react";
@@ -237,9 +238,12 @@ export default function WorkspaceDetail({ params }: WorkspaceDetailProps) {
                           {formatDuration(job.durationSeconds)}
                         </td>
                         <td className="py-4 px-6">
-                          <Badge className={getJobStatusColor(job.status)}>
-                            {job.status}
-                          </Badge>
+                          <div className="flex items-center gap-2">
+                            <Badge className={getJobStatusColor(job.status)}>
+                              {job.status}
+                            </Badge>
+                            <ReleaseStatusBadge status={getReleaseStatus(job)} />
+                          </div>
                         </td>
                         <td className="py-4 px-6">
                           <div className="flex space-x-2">

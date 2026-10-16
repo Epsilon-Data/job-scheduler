@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { storage } from "../storage";
+import { asyncHandler } from "./errorHandler";
 import type { User } from "@shared/schema";
 
 // Extend Express Request type to include session and user
@@ -81,6 +82,30 @@ export const requireStaff = async (
     req.user = user;
     next();
 };
+
+/**
+ * Middleware to require an approved reviewer (output-release gate)
+ * Only "reviewer" qualifies; staff do not. A failed user lookup goes to the error handler.
+ */
+export const requireReviewer = asyncHandler(async (
+    req: Request,
+    res: Response,
+    next: NextFunction
+): Promise<void> => {
+    if (!req.session.userId) {
+        res.status(401).json({ message: "Not authenticated" });
+        return;
+    }
+
+    const user = req.user || await storage.getUser(req.session.userId);
+    if (!user || user.role !== "reviewer" || user.approvalStatus !== "approved") {
+        res.status(403).json({ message: "Insufficient permissions" });
+        return;
+    }
+
+    req.user = user;
+    next();
+});
 
 /**
  * Middleware to require GitHub access token

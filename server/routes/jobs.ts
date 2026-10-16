@@ -3,6 +3,7 @@ import { storage } from "../storage";
 import { type JobLogEntry } from "@shared/schema";
 import { githubApi } from "../github";
 import { requireAuth, asyncHandler, NotFoundError, ForbiddenError } from "../middleware";
+import { toResearcherJob, toResearcherJobs, stripLogErrorDetails } from "../release";
 
 const router = Router();
 
@@ -24,7 +25,7 @@ router.get("/user/jobs", requireAuth, asyncHandler(async (req, res) => {
         { page, limit, status }
     );
 
-    res.json(result);
+    res.json({ ...result, data: await toResearcherJobs(result.data) });
 }));
 
 /**
@@ -33,21 +34,24 @@ router.get("/user/jobs", requireAuth, asyncHandler(async (req, res) => {
  */
 router.get("/jobs/:jobId", requireAuth, asyncHandler(async (req, res) => {
     // Expects jobId format (JOB-XXXXX)
-    const jobRequest = await storage.getJobRequestByJobId(req.params.jobId);
+    const row = await storage.getJobRequestByJobId(req.params.jobId);
 
-    if (!jobRequest) {
+    if (!row) {
         throw new NotFoundError("Job request not found");
     }
 
     // Check if user owns job request
-    if (jobRequest.userId !== req.session.userId) {
+    if (row.userId !== req.session.userId) {
         throw new ForbiddenError("Access denied");
     }
 
-    // Get job logs
-    let detailedLogs: JobLogEntry[] = [];
+    // Held output and error text stay hidden until a reviewer releases them
+    const [jobRequest] = await toResearcherJobs([row]);
+
+    // Get job logs (error details can carry enclave output, so they are never returned)
+    let detailedLogs: Omit<JobLogEntry, "errorDetails" | "error_details">[] = [];
     try {
-        detailedLogs = await storage.getJobLogs(jobRequest.jobId);
+        detailedLogs = stripLogErrorDetails<JobLogEntry>(await storage.getJobLogs(jobRequest.jobId));
     } catch (error) {
         console.warn(`Could not fetch job logs for ${jobRequest.jobId}:`, (error as Error).message);
     }
@@ -102,6 +106,9 @@ router.get("/jobs/:jobId", requireAuth, asyncHandler(async (req, res) => {
         enclave_pcr0: jobRequest.enclavePcr0,
         ai_enabled: jobRequest.aiEnabled,
         zkp_enabled: jobRequest.zkpEnabled,
+        release_status: jobRequest.releaseStatus,
+        release: jobRequest.release,
+        ai_decision: jobRequest.aiDecision,
         detailed_logs: detailedLogs,
         ai_logs: detailedLogs
             ?.filter(log => log.worker_name === "AIAgentWorker")
@@ -118,7 +125,7 @@ router.get("/jobs/:jobId", requireAuth, asyncHandler(async (req, res) => {
  * GET /api/jobs
  */
 router.get("/jobs", requireAuth, asyncHandler(async (req, res) => {
-    const jobRequests = await storage.getJobRequestsByUserId(req.session.userId!);
+    const jobRequests = await toResearcherJobs(await storage.getJobRequestsByUserId(req.session.userId!));
 
     const jobsWithWorkspace = await Promise.all(
         jobRequests.map(async (job) => {
@@ -144,7 +151,8 @@ router.get("/jobs", requireAuth, asyncHandler(async (req, res) => {
                 execution_method: job.executionMethod,
                 validation_status: job.validationStatus,
                 validation_policy: job.validationPolicy,
-                validation_decision: job.validationDecision
+                validation_decision: job.validationDecision,
+                release_status: job.releaseStatus
             };
         })
     );
@@ -210,13 +218,15 @@ router.post("/jobs", requireAuth, asyncHandler(async (req, res) => {
         executionMethod: "job-runner",
     });
 
+    const job = toResearcherJob(jobRequest);
     res.json({
-        id: jobRequest.jobId,
+        id: job.jobId,
         github_repo: workspace.githubRepo,
         branch_name: workspace.githubBranch,
-        status: jobRequest.status,
-        created_at: jobRequest.createdAt,
-        updated_at: jobRequest.updatedAt
+        status: job.status,
+        created_at: job.createdAt,
+        updated_at: job.updatedAt,
+        release_status: job.releaseStatus
     });
 }));
 

@@ -34,6 +34,8 @@ export function normalizeJobRequest<T extends Record<string, unknown>>(job: T): 
     ['ai_logs', 'aiLogs'],
     ['github_repo', 'githubRepo'],
     ['branch_name', 'branchName'],
+    ['release_status', 'releaseStatus'],
+    ['ai_decision', 'aiDecision'],
   ];
 
   for (const [snakeCase, camelCase] of fieldMappings) {
@@ -85,4 +87,28 @@ function normalizeLogEntry(log: Record<string, unknown>): Record<string, unknown
   }
 
   return normalized;
+}
+
+export interface ApiError {
+  status: number | null;
+  message: string;
+  code?: string;
+}
+
+/**
+ * Parse an error thrown by apiRequest or the default query function ("<status>: <body>")
+ */
+export function parseApiError(error: unknown): ApiError {
+  const text = error instanceof Error ? error.message : String(error);
+  const match = text.match(/^(\d{3}): ([\s\S]*)$/);
+  if (!match) return { status: null, message: text };
+
+  const status = Number(match[1]);
+  try {
+    const body = JSON.parse(match[2]);
+    if (body && typeof body.message === "string") {
+      return { status, message: body.message, code: typeof body.code === "string" ? body.code : undefined };
+    }
+  } catch {}
+  return { status, message: match[2] };
 }

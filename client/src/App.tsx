@@ -13,6 +13,8 @@ import CreateWorkspace from "@/pages/create-workspace";
 import WorkspaceDetail from "@/pages/workspace-detail";
 import CreateJobRequest from "@/pages/create-job-request";
 import JobRequestDetail from "@/pages/job-request-detail";
+import ReviewQueue from "@/pages/review-queue";
+import ReviewDetail from "@/pages/review-detail";
 import NotFound from "@/pages/not-found";
 
 function AppContent() {
@@ -44,6 +46,8 @@ function AppContent() {
         <Route path="/jobs/:id" component={JobRequestDetail} />
         <Route path="/jobs" component={UserDashboard} />
         <Route path="/staff" component={StaffDashboard} />
+        <Route path="/review/:jobId" component={ReviewDetail} />
+        <Route path="/review" component={ReviewQueue} />
         <Route path="/requests" component={UserDashboard} />
         <Route component={NotFound} />
       </Switch>
