@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth, useReviewAccessCheck } from "@/hooks/use-auth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,9 +24,9 @@ import { ReleaseDecisionBadge, ReleaseStatusBadge } from "@/components/release-s
 import { getJobStatusColor } from "@/lib/status-utils";
 import { formatDateTime } from "@/lib/date-utils";
 import { formatBytes } from "@/lib/job-utils";
-import { parseApiError } from "@/lib/api-utils";
+import { isReviewAccessLost, parseApiError, reviewErrorMessage } from "@/lib/api-utils";
 import { AI_ADVISORY_LABEL, OWN_JOB_REVIEW_MESSAGE } from "@/lib/constants";
-import type { ReviewDecision, ReviewDecisionResult, ReviewJobDetail } from "@/types/job";
+import type { AttestationStatus, ReviewDecision, ReviewDecisionResult, ReviewJobDetail } from "@/types/job";
 
 interface ReviewDetailProps {
   params: { jobId: string };
@@ -45,12 +45,15 @@ export default function ReviewDetail({ params }: ReviewDetailProps) {
   const isReviewer = user?.role === "reviewer" && user.approvalStatus === "approved";
   const detailKey = [`/api/review/jobs/${params.jobId}`];
 
-  // Redirect if not an approved reviewer (same check as requireReviewer)
+  // Redirect if not an approved reviewer (same check as requireReviewer); the queue tells an unapproved
+  // reviewer account why
   useEffect(() => {
     if (!user) {
       setLocation("/auth");
-    } else if (!isReviewer) {
+    } else if (user.role !== "reviewer") {
       setLocation("/dashboard");
+    } else if (!isReviewer) {
+      setLocation("/review");
     }
   }, [user, isReviewer, setLocation]);
 
@@ -58,6 +61,8 @@ export default function ReviewDetail({ params }: ReviewDetailProps) {
     queryKey: detailKey,
     enabled: isReviewer,
   });
+
+  useReviewAccessCheck(error);
 
   const refreshReviewQueries = () => {
     queryClient.invalidateQueries({ queryKey: detailKey });
@@ -86,11 +91,14 @@ export default function ReviewDetail({ params }: ReviewDetailProps) {
       setDialogOpen(false);
       toast({
         title: "Decision not recorded",
-        description: apiError.code === "OWN_JOB" ? OWN_JOB_REVIEW_MESSAGE : apiError.message,
+        description: reviewErrorMessage(apiError),
         variant: "destructive",
       });
-      // Already decided by another reviewer, or the held output changed
-      if (apiError.status === 409) {
+      if (isReviewAccessLost(apiError)) {
+        // Signed out, or no longer a reviewer
+        queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      } else if (apiError.status === 409 || apiError.status === 404) {
+        // Already decided, the held output or the assignment changed, or the job left the reviewer's projects
         refreshReviewQueries();
       }
     },
@@ -126,9 +134,9 @@ export default function ReviewDetail({ params }: ReviewDetailProps) {
       return <RefusalState title={OWN_JOB_REVIEW_MESSAGE} message="Another reviewer has to decide on its release." />;
     }
     if (apiError.status === 404) {
-      return <RefusalState title="Nothing to review" message={apiError.message} />;
+      return <RefusalState title="Nothing to review" message={reviewErrorMessage(apiError)} />;
     }
-    return <RefusalState title="Error loading job" message={apiError.message} />;
+    return <RefusalState title="Error loading job" message={reviewErrorMessage(apiError)} />;
   }
 
   if (!job) {
@@ -183,6 +191,14 @@ export default function ReviewDetail({ params }: ReviewDetailProps) {
                 </p>
               </div>
               <div>
+                <span className="text-muted-foreground">Project</span>
+                <p className="font-mono text-xs break-all">{job.project_id ?? "-"}</p>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Archetype</span>
+                <p className="text-foreground break-all">{job.archetype_id ?? "-"}</p>
+              </div>
+              <div>
                 <span className="text-muted-foreground">Commit</span>
                 <p className="font-mono text-xs">{job.commit_sha}</p>
               </div>
@@ -197,7 +213,11 @@ export default function ReviewDetail({ params }: ReviewDetailProps) {
         </Card>
 
         {/* Output */}
-        <OutputCard output={job.output} released={job.release_status === "released"} />
+        <OutputCard
+          output={job.output}
+          attestationStatus={job.attestation_status}
+          released={job.release_status === "released"}
+        />
 
         {/* AI Advisory */}
         <AIAdvisoryCard ai={job.ai} />
@@ -217,7 +237,8 @@ export default function ReviewDetail({ params }: ReviewDetailProps) {
             </CardHeader>
             <CardContent>
               <div className="flex gap-3">
-                <Button onClick={() => openDialog("approve")}>
+                {/* The server says when Approve is refused (e.g. the result does not match the attested hash) */}
+                <Button onClick={() => openDialog("approve")} disabled={!!job.approve_blocked_reason}>
                   <ShieldCheck className="mr-2 h-4 w-4" />
                   Approve release
                 </Button>
@@ -226,6 +247,11 @@ export default function ReviewDetail({ params }: ReviewDetailProps) {
                   Reject release
                 </Button>
               </div>
+              {job.approve_blocked_reason && (
+                <p className="mt-3 text-sm text-amber-700 bg-amber-50 rounded px-3 py-2">
+                  {job.approve_blocked_reason}
+                </p>
+              )}
             </CardContent>
           </Card>
         )}
@@ -279,7 +305,11 @@ export default function ReviewDetail({ params }: ReviewDetailProps) {
 
 /* ── Output ──────────────────────────────────────────────────── */
 
-function OutputCard({ output, released }: { output: ReviewJobDetail["output"]; released: boolean }) {
+function OutputCard({ output, attestationStatus, released }: {
+  output: ReviewJobDetail["output"];
+  attestationStatus: AttestationStatus;
+  released: boolean;
+}) {
   const title = `${released ? "Released" : "Held"} ${output.kind === "error" ? "Error Text" : "Output"}`;
 
   return (
@@ -299,7 +329,7 @@ function OutputCard({ output, released }: { output: ReviewJobDetail["output"]; r
           <p className="text-sm text-muted-foreground bg-muted rounded-lg p-4">The output is empty.</p>
         )}
         <div className="space-y-2 pt-2 border-t">
-          <AttestationMatch matches={output.hash_matches_attestation} />
+          <AttestationMatch status={attestationStatus} />
           <p className="text-xs text-muted-foreground">
             Content SHA-256 <span className="font-mono break-all">{output.content_sha256}</span>
           </p>
@@ -314,8 +344,8 @@ function OutputCard({ output, released }: { output: ReviewJobDetail["output"]; r
   );
 }
 
-function AttestationMatch({ matches }: { matches: boolean | null }) {
-  if (matches === null) {
+function AttestationMatch({ status }: { status: AttestationStatus }) {
+  if (status === "not_attested") {
     return (
       <Badge variant="outline" className="text-muted-foreground text-xs gap-1">
         <Info className="h-3 w-3" /> No attested output hash to compare
@@ -323,7 +353,7 @@ function AttestationMatch({ matches }: { matches: boolean | null }) {
     );
   }
 
-  return matches ? (
+  return status === "matches" ? (
     <Badge variant="outline" className="text-green-700 border-green-300 text-xs gap-1">
       <CheckCircle className="h-3 w-3" /> Matches the attested output hash
     </Badge>

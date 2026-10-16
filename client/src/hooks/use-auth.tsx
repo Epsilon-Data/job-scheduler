@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
+import { isReviewAccessLost, parseApiError } from "@/lib/api-utils";
 import type { User } from "@shared/schema";
 
 export function useAuth() {
@@ -63,4 +64,19 @@ export function useAuth() {
     logout: logoutMutation.mutate,
     isLoggingOut: logoutMutation.isPending,
   };
+}
+
+/**
+ * Re-reads the signed-in account when a review request shows it has changed (signed out, or no longer
+ * a reviewer), so the app moves on to sign-in or to the account's own pages without waiting for the poll
+ */
+export function useReviewAccessCheck(...errors: (Error | null)[]) {
+  const queryClient = useQueryClient();
+  const accessLost = errors.some((error) => error !== null && isReviewAccessLost(parseApiError(error)));
+
+  useEffect(() => {
+    if (accessLost) {
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+    }
+  }, [accessLost, queryClient]);
 }

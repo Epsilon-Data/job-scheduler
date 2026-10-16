@@ -2,6 +2,8 @@
  * API utility functions for transforming responses
  */
 
+import { OWN_JOB_REVIEW_MESSAGE } from "./constants";
+
 /**
  * Normalize job request data to ensure consistent field names
  * Handles both snake_case (from API) and camelCase field names
@@ -111,4 +113,36 @@ export function parseApiError(error: unknown): ApiError {
     }
   } catch {}
   return { status, message: match[2] };
+}
+
+const NOT_REVIEWER_MESSAGE = "Your account can no longer review jobs.";
+
+// Review routes: plain wording per error code (others keep the server's message)
+const REVIEW_ERROR_MESSAGES = new Map<string, string>([
+  ["REAUTH_REQUIRED", "Your sign-in has expired. Sign in again."],
+  ["KEYCLOAK_UNAVAILABLE", "Your reviewer access could not be confirmed. Try again shortly."],
+  ["NOT_FOUND", "Job not found, or it is not in your projects."],
+  ["OWN_JOB", OWN_JOB_REVIEW_MESSAGE],
+  ["NOT_REVIEWER", NOT_REVIEWER_MESSAGE],
+  ["NOT_PENDING", "This job is no longer awaiting a decision."],
+  ["STALE_OUTPUT", "The held output has changed. Review it again."],
+  ["NO_PROJECT", "This job has no project, so no reviewer can decide on it."],
+  ["ASSIGNMENT_STALE", "Your project assignment could not be confirmed. Try again."],
+  ["NOT_ATTESTED", "The result does not match the hash the enclave signed, so it cannot be approved."],
+]);
+
+export function reviewErrorMessage(error: ApiError): string {
+  const message = error.code ? REVIEW_ERROR_MESSAGES.get(error.code) : undefined;
+  if (message) return message;
+  // requireReviewer answers 403 without a code once the account is no longer an approved reviewer
+  if (error.status === 403) return NOT_REVIEWER_MESSAGE;
+  return error.message;
+}
+
+/**
+ * A review route answering 401 (the session has ended) or 403 for anything but the reviewer's own job
+ * (no longer an approved reviewer) means the signed-in account has changed
+ */
+export function isReviewAccessLost(error: ApiError): boolean {
+  return error.status === 401 || (error.status === 403 && error.code !== "OWN_JOB");
 }

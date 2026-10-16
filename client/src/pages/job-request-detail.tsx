@@ -18,6 +18,7 @@ interface JobRequestDetailProps {
 }
 
 const POLL_INTERVAL = 10000; // 10 seconds
+const RELEASE_POLL_INTERVAL = 30000; // 30 seconds: a review takes longer than a run
 
 function isFullyComplete(job: JobRequest): boolean {
   const terminalStatuses = ["success", "failed", "rejected", "ai_rejected"];
@@ -35,7 +36,10 @@ export default function JobRequestDetail({ params }: JobRequestDetailProps) {
     enabled: user?.approvalStatus === "approved",
     refetchInterval: (query) => {
       const data = query.state.data;
-      if (!data || isFullyComplete(data)) return false;
+      if (!data) return false;
+      // Held output: keep polling so the reviewer's decision shows without a reload
+      if (getReleaseStatus(data) === 'pending') return RELEASE_POLL_INTERVAL;
+      if (isFullyComplete(data)) return false;
       return POLL_INTERVAL;
     },
   });
@@ -70,7 +74,9 @@ export default function JobRequestDetail({ params }: JobRequestDetailProps) {
         <ExecutionOutput jobRequest={jobRequest} />
 
         {/* Attestation */}
-        <AttestationSummary jobRequest={jobRequest} />
+        {getReleaseStatus(jobRequest) === 'pending'
+          ? <AttestationHeldNotice />
+          : <AttestationSummary jobRequest={jobRequest} />}
 
         {/* AI Policy Analysis — visually separated */}
         {aiEnabled && <AIAnalysisSection jobRequest={jobRequest} />}
@@ -85,7 +91,8 @@ export default function JobRequestDetail({ params }: JobRequestDetailProps) {
 /* ── Header ───────────────────────────────────────────────────── */
 
 function JobHeader({ jobRequest }: { jobRequest: JobRequest }) {
-  const releaseBadge = getReleaseStatusBadge(getReleaseStatus(jobRequest));
+  const releaseStatus = getReleaseStatus(jobRequest);
+  const releaseBadge = getReleaseStatusBadge(releaseStatus);
 
   return (
     <div className="mb-6">
@@ -107,7 +114,8 @@ function JobHeader({ jobRequest }: { jobRequest: JobRequest }) {
         <div className="flex items-center space-x-3">
           <Badge className={getJobStatusColor(jobRequest.status)}>{jobRequest.status}</Badge>
           {releaseBadge && <Badge className={releaseBadge.className}>{releaseBadge.label}</Badge>}
-          {jobRequest.status === "success" && (
+          {/* The trust center lists released jobs only */}
+          {jobRequest.status === "success" && releaseStatus === "released" && (
             <a
               href={`${API_CONFIG.TRUST_CENTER_URL}/verify/${jobRequest.jobId}`}
               target="_blank"
@@ -417,6 +425,25 @@ function ExecutionOutput({ jobRequest }: { jobRequest: JobRequest }) {
 }
 
 /* ── Attestation Summary ─────────────────────────────────────── */
+
+// Before release: the attestation carries the output hash, so it is held with the output
+function AttestationHeldNotice() {
+  return (
+    <Card className="mb-6">
+      <CardContent className="pt-4">
+        <div className="flex items-start gap-3 bg-muted rounded-lg p-4">
+          <Lock className="h-5 w-5 text-muted-foreground shrink-0 mt-0.5" />
+          <div>
+            <p className="font-medium text-foreground">Attestation available after release</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              It includes the hash of the output, so it is held with the output.
+            </p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 function AttestationSummary({ jobRequest }: { jobRequest: JobRequest }) {
   const attestationRaw = (jobRequest as any).attestation;

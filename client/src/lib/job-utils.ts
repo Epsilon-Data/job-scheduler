@@ -102,6 +102,13 @@ export function formatBytes(bytes: number | null | undefined): string {
 }
 
 /**
+ * Short form of a project id (a UUID) for tables; the full id goes in a tooltip
+ */
+export function shortProjectId(projectId: string): string {
+  return projectId.slice(0, 8);
+}
+
+/**
  * Format metadata value for display
  */
 export function formatMetadataValue(key: string, value: unknown): string {

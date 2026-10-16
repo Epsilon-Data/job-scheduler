@@ -1,4 +1,5 @@
 import type { JobRelease, ReleaseStatus } from "@shared/schema";
+import type { AttestationStatus } from "@/types/job";
 
 export type JobStatus =
   | "success"
@@ -48,6 +49,13 @@ export const RELEASE_STATUS_BADGES: Partial<Record<ReleaseStatus, { label: strin
 export function getReleaseStatusBadge(status: string | null | undefined) {
   return (status && RELEASE_STATUS_BADGES[status as ReleaseStatus]) || null;
 }
+
+// Review queue: the held output against the output hash the enclave signed
+export const ATTESTATION_STATUS_BADGES: Record<AttestationStatus, { label: string; className: string }> = {
+  matches: { label: "Attested", className: "text-green-700 border-green-300" },
+  mismatch: { label: "Hash mismatch", className: "text-red-700 border-red-300" },
+  not_attested: { label: "Not attested", className: "text-muted-foreground" },
+};
 
 // Job responses carry the release status as release_status, releaseStatus or release.status
 export function getReleaseStatus(job: {

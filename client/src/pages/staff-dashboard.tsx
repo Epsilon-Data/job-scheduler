@@ -12,8 +12,10 @@ import { useLocation } from "wouter";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { getApprovalStatusVariant } from "@/lib/status-utils";
 import { getJobStatusColor } from "@/lib/status-utils";
-import { formatDate } from "@/lib/date-utils";
+import { formatDate, formatDateTimeShort } from "@/lib/date-utils";
+import { parseApiError } from "@/lib/api-utils";
 import type { User, Workspace, JobRequest } from "@shared/schema";
+import type { ReviewRouting } from "@/types/job";
 
 export default function StaffDashboard() {
   const { user } = useAuth();
@@ -277,6 +279,9 @@ export default function StaffDashboard() {
           </CardContent>
         </Card>
 
+        {/* Review Routing */}
+        <ReviewRoutingCard />
+
         {/* Job Requests Section */}
         <div className="mt-8">
           <h2 className="text-2xl font-bold text-foreground mb-6">All Job Requests</h2>
@@ -344,5 +349,80 @@ export default function StaffDashboard() {
         </div>
       </div>
     </div>
+  );
+}
+
+// Held jobs waiting for review per project, and how many reviewers each project has (counts only)
+function ReviewRoutingCard() {
+  const { data: routing, isLoading, error } = useQuery<ReviewRouting>({
+    queryKey: ["/api/staff/review-routing"],
+  });
+
+  return (
+    <Card className="mt-8">
+      <CardHeader>
+        <CardTitle>Review Routing</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <LoadingSpinner message="Loading review routing..." fullScreen={false} />
+        ) : error ? (
+          <p className="text-sm text-red-600 text-center">{parseApiError(error).message}</p>
+        ) : routing && (
+          <div className="space-y-4">
+            {routing.pending_without_project > 0 && (
+              <p className="text-sm text-amber-700 bg-amber-50 rounded px-3 py-2">
+                Held jobs without a project: {routing.pending_without_project}. No reviewer can see them.
+              </p>
+            )}
+            {routing.projects.length === 0 ? (
+              <p className="text-muted-foreground text-center">No project has held jobs or reviewers yet.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-border">
+                      <th className="text-left py-3 px-6 text-sm font-medium text-muted-foreground">
+                        Project
+                      </th>
+                      <th className="text-left py-3 px-6 text-sm font-medium text-muted-foreground">
+                        Pending
+                      </th>
+                      <th className="text-left py-3 px-6 text-sm font-medium text-muted-foreground">
+                        Oldest pending
+                      </th>
+                      <th className="text-left py-3 px-6 text-sm font-medium text-muted-foreground">
+                        Reviewers
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {routing.projects.map((project) => (
+                      <tr key={project.project_id} className="border-b border-border hover:bg-muted/50">
+                        <td className="py-4 px-6 text-sm font-mono text-foreground">{project.project_id}</td>
+                        <td className="py-4 px-6 text-sm text-foreground">{project.pending_count}</td>
+                        <td className="py-4 px-6 text-sm text-muted-foreground">
+                          {formatDateTimeShort(project.oldest_pending_completed_at)}
+                        </td>
+                        <td className="py-4 px-6 text-sm">
+                          {/* Pending jobs with nobody to review them */}
+                          <span className={
+                            project.reviewer_count === 0 && project.pending_count > 0
+                              ? "font-medium text-red-600"
+                              : "text-foreground"
+                          }>
+                            {project.reviewer_count}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

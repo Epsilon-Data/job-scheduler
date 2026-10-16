@@ -10,30 +10,30 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Link, useLocation } from "wouter";
-import { LogOut, Github, Link2, Link2Off } from "lucide-react";
+import { LogOut, Github, Link2, Link2Off, User as UserIcon } from "lucide-react";
 
 export function Header() {
   const { user, logout, isLoggingOut } = useAuth();
-  const { isConnected, username, connect, disconnect } = useGitHub();
+  // GitHub is a researcher feature (requireResearcher): not for reviewer accounts or accounts awaiting approval
+  const canUseGitHub = user?.role !== "reviewer" && user?.approvalStatus === "approved";
+  const { isConnected, username, connect, disconnect } = useGitHub({ enabled: canUseGitHub });
   const [location] = useLocation();
 
   if (!user) return null;
 
   const isStaff = user.role === "staff";
   const isReviewer = user.role === "reviewer";
-  const navItems = [
-    { href: "/dashboard", label: "Dashboard" },
-    { href: "/workspaces", label: "Workspaces" },  
-    { href: "/jobs", label: "Job Requests" },
-  ];
+  // Reviewer accounts only review, and only they see Review
+  const navItems = isReviewer
+    ? [{ href: "/review", label: "Review" }]
+    : [
+        { href: "/dashboard", label: "Dashboard" },
+        { href: "/workspaces", label: "Workspaces" },
+        { href: "/jobs", label: "Job Requests" },
+      ];
 
   if (isStaff) {
     navItems.push({ href: "/staff", label: "Staff Dashboard" });
-  }
-
-  // Same check as requireReviewer on the server
-  if (isReviewer && user.approvalStatus === "approved") {
-    navItems.push({ href: "/review", label: "Review" });
   }
 
   return (
@@ -65,44 +65,46 @@ export function Header() {
 
           <div className="flex items-center space-x-4">
             {/* GitHub Connection Status */}
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  {isConnected ? (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => disconnect()}
-                      className="text-green-600 hover:text-red-600"
-                    >
-                      <Github className="w-4 h-4 mr-1" />
-                      <Link2 className="w-3 h-3" />
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => connect()}
-                      className="text-muted-foreground hover:text-foreground"
-                    >
-                      <Github className="w-4 h-4 mr-1" />
-                      <Link2Off className="w-3 h-3" />
-                    </Button>
-                  )}
-                </TooltipTrigger>
-                <TooltipContent>
-                  {isConnected
-                    ? `GitHub connected as ${username} — click to disconnect`
-                    : "Connect GitHub to access repositories"}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            {canUseGitHub && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    {isConnected ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => disconnect()}
+                        className="text-green-600 hover:text-red-600"
+                      >
+                        <Github className="w-4 h-4 mr-1" />
+                        <Link2 className="w-3 h-3" />
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => connect()}
+                        className="text-muted-foreground hover:text-foreground"
+                      >
+                        <Github className="w-4 h-4 mr-1" />
+                        <Link2Off className="w-3 h-3" />
+                      </Button>
+                    )}
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {isConnected
+                      ? `GitHub connected as ${username} — click to disconnect`
+                      : "Connect GitHub to access repositories"}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
 
             <div className="flex items-center space-x-2">
               <Avatar className="w-8 h-8">
                 <AvatarImage src={user.avatarUrl || ""} alt={user.fullName || user.username} />
                 <AvatarFallback>
-                  <Github className="w-4 h-4" />
+                  {isReviewer ? <UserIcon className="w-4 h-4" /> : <Github className="w-4 h-4" />}
                 </AvatarFallback>
               </Avatar>
               <span className="text-sm font-medium text-foreground">
