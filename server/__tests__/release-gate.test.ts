@@ -284,6 +284,109 @@ describe.skipIf(!databaseUrl)("output-release gate API (database tests, need TES
     }
   });
 
+  it("researchers get the attestation and verification receipt only once the output is released", async () => {
+    const researcher = await newResearcher();
+    const holdAttested = async (label: string) => {
+      const jobId = await h.createJob(researcher);
+      const sha = await h.completeWithHeldOutput(jobId, { kind: "result", content: marker(label) });
+      const material = {
+        attestation: JSON.stringify({ attestation: { attestation_document: marker(`${label}-doc`) }, proof: { output_hash: sha } }),
+        receipt: JSON.stringify({ output_hash: sha, note: marker(`${label}-receipt`) }),
+        haReceipt: JSON.stringify({ receipt: marker(`${label}-ha`) }),
+      };
+      await h.query(
+        "UPDATE job_requests SET attestation = $2, verification_receipt = $3, ha_receipt = $4 WHERE job_id = $1",
+        [jobId, material.attestation, material.receipt, material.haReceipt],
+      );
+      return { jobId, sha, ...material };
+    };
+    const pending = await holdAttested("att-pending");
+    const withheld = await holdAttested("att-withheld");
+    const released = await holdAttested("att-released");
+    const reject = { decision: "reject", reason: "Small cell counts", output_sha256: withheld.sha };
+    expect((await decide(withheld.jobId, reject, reviewer)).status).toBe(201);
+    expect((await decide(released.jobId, { decision: "approve", output_sha256: released.sha }, reviewer)).status).toBe(201);
+
+    for (const job of [pending, withheld]) {
+      const views = await researcherViews(researcher, job.jobId);
+      expectAbsent(views.bodies, job.sha, job.attestation, job.receipt, job.haReceipt);
+      expect(views.detail).toMatchObject({ attestation: null, verification_receipt: null });
+      expect(views.paged).toMatchObject({ attestation: null, verificationReceipt: null });
+      expect(views.inWorkspace).toMatchObject({ attestation: null, verificationReceipt: null });
+    }
+
+    const views = await researcherViews(researcher, released.jobId);
+    expect(views.detail).toMatchObject({ attestation: released.attestation, verification_receipt: released.receipt });
+    expect(views.paged).toMatchObject({ attestation: released.attestation, verificationReceipt: released.receipt });
+    expect(views.inWorkspace.verificationReceipt).toBe(released.receipt);
+    // The ATL receipt is not part of the researcher API at all
+    expectAbsent(views.bodies, released.haReceipt);
+
+    // Jobs from before the gate (backfilled as released) are unchanged
+    const legacy = await h.createJob({ ...researcher, status: "success", executionOutput: "42\n" });
+    await h.query("UPDATE job_requests SET attestation = $2, verification_receipt = $3 WHERE job_id = $1", [legacy, "{\"legacy\":1}", "{\"ok\":true}"]);
+    await h.markLegacyReleased(legacy);
+    expect((await researcherViews(researcher, legacy)).detail).toMatchObject({
+      attestation: "{\"legacy\":1}",
+      verification_receipt: "{\"ok\":true}",
+    });
+  });
+
+  it("researcher routes refuse reviewer accounts (REVIEWER_ACCOUNT) and unapproved accounts (NOT_APPROVED)", async () => {
+    const researcher = await newResearcher();
+    const jobId = await h.createJob(researcher);
+    // A reviewer may still own a workspace from before the account became a reviewer
+    const reviewerWorkspace = await h.createWorkspace(reviewer);
+    const createdBy = async (userIds: string[]) => {
+      const { rows } = await h.query(
+        `SELECT (SELECT count(*) FROM workspaces WHERE user_id = ANY($1::uuid[]) AND github_repo = 'example/x')::int AS workspaces,
+                (SELECT count(*) FROM job_requests WHERE user_id = ANY($1::uuid[]))::int AS jobs`,
+        [userIds],
+      );
+      return rows[0];
+    };
+
+    const researcherCalls = (userId: string | undefined, workspaceId: string) => [
+      get("/api/workspaces", userId),
+      get(`/api/workspaces/${workspaceId}`, userId),
+      post("/api/workspaces", { name: "x", githubRepo: "example/x", githubBranch: "main" }, userId),
+      get(`/api/workspaces/${workspaceId}/jobs`, userId),
+      post(`/api/workspaces/${workspaceId}/jobs`, {}, userId),
+      get("/api/user/jobs", userId),
+      get("/api/jobs", userId),
+      get(`/api/jobs/${jobId}`, userId),
+      post("/api/jobs", { github_repo: "example/x", branch_name: "main" }, userId),
+      get("/api/github/status", userId),
+      get("/api/github/connect", userId),
+      get("/api/github/repos", userId),
+      post("/api/github/disconnect", {}, userId),
+    ];
+
+    const pendingUser = await h.createUser("user", "pending");
+    const rejectedUser = await h.createUser("user", "rejected");
+    const cases: [string | undefined, string, number, string | undefined][] = [
+      [reviewer, reviewerWorkspace, 403, "REVIEWER_ACCOUNT"],
+      [pendingUser, await h.createWorkspace(pendingUser), 403, "NOT_APPROVED"],
+      [rejectedUser, await h.createWorkspace(rejectedUser), 403, "NOT_APPROVED"],
+      [undefined, researcher.workspaceId, 401, undefined],
+    ];
+    for (const [userId, workspaceId, status, code] of cases) {
+      for (const response of await Promise.all(researcherCalls(userId, workspaceId))) {
+        expect(response.status).toBe(status);
+        expect(response.body.code).toBe(code);
+      }
+    }
+    expect(await createdBy([reviewer, pendingUser, rejectedUser])).toEqual({ workspaces: 0, jobs: 0 });
+
+    // Approved users and staff keep their researcher routes, reviewers keep theirs
+    for (const userId of [researcher.userId, staff]) {
+      expect((await get("/api/workspaces", userId)).status).toBe(200);
+      expect((await get("/api/user/jobs", userId)).status).toBe(200);
+    }
+    expect((await get("/api/review/jobs", reviewer)).status).toBe(200);
+    expect((await get("/api/auth/me", reviewer)).status).toBe(200);
+  });
+
   it("self-review: a reviewer cannot read or decide their own job, or a job in their workspace", async () => {
     const selfReviewer = await h.createUser("reviewer");
     const ownWorkspace = await h.createWorkspace(selfReviewer);
@@ -353,9 +456,14 @@ describe.skipIf(!databaseUrl)("output-release gate API (database tests, need TES
     const researcher = await newResearcher();
     const jobId = await h.createJob(researcher);
     const sha = await h.completeWithHeldOutput(jobId, { kind: "result", content: marker("backstop") });
+    // A staff account with a (bogus) mirror row passes the app's project scope
+    const staffWithProject = await h.createUser("staff");
+    await h.query("INSERT INTO reviewer_projects (user_id, project_id) VALUES ($1, $2)", [staffWithProject, h.TEST_PROJECT_ID]);
 
     // The role is normally checked by requireReviewer; called directly, the RG002 trigger refuses it
-    const attempt = storage.recordReleaseDecision({ jobId, reviewerId: staff, decision: "approve", reason: null, outputSha256: sha });
+    const attempt = storage.recordReleaseDecision({
+      jobId, reviewerId: staffWithProject, decision: "approve", reason: null, outputSha256: sha,
+    });
     await expect(attempt).rejects.toBeInstanceOf(ReleaseDecisionError);
     await expect(attempt).rejects.toMatchObject({ reason: "not_reviewer" });
     expect(await releaseStatusOf(jobId)).toBe("pending");
@@ -548,10 +656,13 @@ describe.skipIf(!databaseUrl)("output-release gate API (database tests, need TES
       status: "success",
       release_status: "pending",
       completed_at: expect.any(String),
+      project_id: h.TEST_PROJECT_ID,
+      archetype_id: "archetype-test",
       submitted_by: { id: researcher.userId, username: expect.any(String), full_name: expect.any(String) },
       workspace: { id: researcher.workspaceId, name: expect.any(String), github_repo: expect.any(String) },
       output_kind: "result",
       output_size: Buffer.byteLength(content, "utf8"),
+      attestation_status: "matches",
       own_job: false,
       ai_decision: "ai_approved",
       decision: null,

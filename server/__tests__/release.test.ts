@@ -47,6 +47,8 @@ function job(overrides: Partial<JobRequest> = {}): JobRequest {
     releaseStatus: null,
     aiDecision: null,
     outputSha256: null,
+    projectId: null,
+    archetypeId: null,
     ...overrides,
   };
 }
@@ -71,6 +73,7 @@ function decision(overrides: Partial<ReleaseDecision> = {}): ReleaseDecision {
     reviewerId: REVIEWER_ID,
     reason: null,
     decidedAt: new Date("2026-10-02T09:30:00Z"),
+    projectId: null,
     ...overrides,
   };
 }
@@ -139,6 +142,19 @@ describe("toResearcherJob", () => {
 
     const released = toResearcherJob(job({ releaseStatus: "released", outputSha256: sha }), output("result", RESULT), decision());
     expect(released.outputSha256).toBe(sha);
+  });
+
+  it("hands out the attestation and verification receipt only once the output is released", () => {
+    const attestation = JSON.stringify({ proof: { output_hash: "c".repeat(64) } });
+    const verificationReceipt = JSON.stringify({ output_hash: "c".repeat(64), authentic: true });
+    for (const releaseStatus of [null, "pending", "withheld", "not_required"] as const) {
+      const view = toResearcherJob(job({ releaseStatus, attestation, verificationReceipt }), output("result", RESULT));
+      expect(view).toMatchObject({ attestation: null, verificationReceipt: null });
+      expect(JSON.stringify(view)).not.toContain("c".repeat(64));
+    }
+
+    const released = toResearcherJob(job({ releaseStatus: "released", attestation, verificationReceipt }), output("result", RESULT), decision());
+    expect(released).toMatchObject({ attestation, verificationReceipt });
   });
 
   it("shows a released held error as the error message, not as output", () => {

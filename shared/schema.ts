@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, uuid, varchar, integer, jsonb, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, uuid, varchar, integer, jsonb, boolean, primaryKey } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -98,10 +98,14 @@ export const jobRequests = pgTable("job_requests", {
   releaseStatus: varchar("release_status", { length: 20, enum: RELEASE_STATUSES }),
   aiDecision: varchar("ai_decision", { length: 32 }),
   outputSha256: varchar("output_sha256", { length: 64 }),
+  // Platform project the job analyses (build.yml datasets[0].dataset_id), recorded by the coordinator
+  // before any real data is requested (coordinator alembic revision c5e2a8d4b7f1)
+  projectId: uuid("project_id"),
+  archetypeId: varchar("archetype_id", { length: 255 }),
 });
 
-// job_outputs and release_decisions are created by coordinator alembic revision 7f3a9c2d1e4b;
-// never run drizzle-kit push against a shared database.
+// job_outputs and release_decisions are created by coordinator alembic revision 7f3a9c2d1e4b,
+// reviewer_projects by c5e2a8d4b7f1; never run drizzle-kit push against a shared database.
 export const jobOutputs = pgTable("job_outputs", {
   jobId: varchar("job_id", { length: 255 }).primaryKey().references(() => jobRequests.jobId, { onDelete: "cascade" }),
   kind: varchar("kind", { length: 10, enum: ["result", "error"] }).notNull(),
@@ -119,7 +123,15 @@ export const releaseDecisions = pgTable("release_decisions", {
   reviewerId: uuid("reviewer_id").notNull().references(() => users.id),
   reason: text("reason"),
   decidedAt: timestamp("decided_at", { withTimezone: true }).notNull().defaultNow(),
+  projectId: uuid("project_id"), // stamped by the decision trigger
 });
+
+// Mirror of the reviewer's Keycloak groups "Reviewers of <project id>", refreshed at login and on every re-check
+export const reviewerProjects = pgTable("reviewer_projects", {
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id").notNull(),
+  syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [primaryKey({ columns: [table.userId, table.projectId] })]);
 
 export const jobLogs = pgTable("job_logs", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -204,6 +216,8 @@ export const insertJobRequestSchema = createInsertSchema(jobRequests).omit({
   releaseStatus: true,
   aiDecision: true,
   outputSha256: true,
+  projectId: true,
+  archetypeId: true,
 });
 
 export const jobUpdateSchema = z.object({
@@ -232,6 +246,7 @@ export type Workspace = typeof workspaces.$inferSelect;
 export type InsertWorkspace = z.infer<typeof insertWorkspaceSchema>;
 export type JobOutput = typeof jobOutputs.$inferSelect;
 export type ReleaseDecision = typeof releaseDecisions.$inferSelect;
+export type ReviewerProject = typeof reviewerProjects.$inferSelect;
 
 // Release state shown to researchers (no reviewer identity)
 export interface JobRelease {

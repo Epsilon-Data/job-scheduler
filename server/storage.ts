@@ -5,6 +5,7 @@ import {
   jobLogs,
   jobOutputs,
   releaseDecisions,
+  reviewerProjects,
   type User,
   type InsertUser,
   type Workspace,
@@ -13,13 +14,16 @@ import {
   type InsertJobRequest,
   type JobOutput,
   type ReleaseDecision,
+  type ReviewerProject,
   type PaginationParams,
   type PaginatedJobsResponse,
   type JobStats,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, asc, and, or, count, sql, SQL, inArray, isNotNull } from "drizzle-orm";
+import { eq, desc, asc, and, or, count, sql, SQL, inArray, notInArray, isNotNull } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
+
+type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 // Extended workspace type with job statistics
 export interface WorkspaceWithJobCounts extends Workspace {
@@ -48,10 +52,13 @@ type PersonSummary = Pick<User, "id" | "username" | "fullName">;
 
 // Review queue row: never carries the held content
 export interface ReviewJobSummary {
-  job: Pick<JobRequest, "jobId" | "userId" | "status" | "releaseStatus" | "completedAt" | "aiDecision" | "executionMetrics">;
+  job: Pick<
+    JobRequest,
+    "jobId" | "userId" | "status" | "releaseStatus" | "completedAt" | "aiDecision" | "executionMetrics" | "projectId" | "archetypeId"
+  >;
   submitter: PersonSummary;
   workspace: Pick<Workspace, "id" | "userId" | "name" | "githubRepo">;
-  output: { kind: JobOutput["kind"]; sizeBytes: number } | null;
+  output: Pick<JobOutput, "kind" | "contentSha256" | "attestedOutputHash"> & { sizeBytes: number } | null;
   decision: ReleaseDecision | null;
   reviewer: PersonSummary | null;
 }
@@ -60,6 +67,39 @@ export interface ReviewJobDetail extends Omit<ReviewJobSummary, "job" | "output"
   job: ReviewJobSummary["job"] &
     Pick<JobRequest, "commitSha" | "verificationReceipt" | "validationStatus" | "validationDecision">;
   output: JobOutput | null;
+  // Dev databases may let unattested results be released (epsilon.allow_unattested_release, read by the trigger)
+  allowUnattestedRelease: boolean;
+}
+
+// Profile fields a Keycloak login writes to the user row
+export interface KeycloakProfile {
+  externalId: string;
+  username: string;
+  email: string;
+  fullName: string;
+  avatarUrl: string;
+}
+
+// What Keycloak says about an account: the role it should have given its current one, and the projects it
+// reviews (mirrored only while the resulting role is 'reviewer')
+export interface AccessSync {
+  roleFor(currentRole: string): string;
+  projectIds: string[];
+}
+
+export interface AccessSyncResult {
+  user: User;
+  previousRole: string | null; // null for a new user
+}
+
+export interface ReviewRouting {
+  projects: {
+    projectId: string;
+    pendingCount: number;
+    oldestPendingCompletedAt: Date | null;
+    reviewerCount: number;
+  }[];
+  pendingWithoutProject: number;
 }
 
 export interface NewReleaseDecision {
@@ -76,7 +116,11 @@ export type ReleaseDecisionFailure =
   | "own_job"
   | "not_reviewer"
   | "not_pending"
-  | "stale_output";
+  | "stale_output"
+  | "no_project"
+  | "not_assigned"
+  | "assignment_stale"
+  | "not_attested";
 
 export class ReleaseDecisionError extends Error {
   reason: ReleaseDecisionFailure;
@@ -95,20 +139,70 @@ const RELEASE_GATE_SQLSTATES = new Map<string, ReleaseDecisionFailure>([
   ["RG003", "not_pending"],
   ["RG004", "stale_output"],
   ["RG005", "not_found"],
+  ["RG006", "no_project"],
+  ["RG007", "not_assigned"],
+  ["RG008", "assignment_stale"],
+  ["RG009", "not_attested"],
   ["23505", "not_pending"],
 ]);
+
+// The one rule for which jobs a reviewer may see or decide: those of the projects mirrored for them from
+// Keycloak. A job without a project is outside every reviewer's projects.
+function reviewerScope(reviewerId: string): SQL {
+  return inArray(
+    jobRequests.projectId,
+    db.select({ projectId: reviewerProjects.projectId }).from(reviewerProjects).where(eq(reviewerProjects.userId, reviewerId)),
+  );
+}
+
+// Sets the role Keycloak decides and replaces the account's reviewer_projects rows, stamping synced_at
+// with the database clock the decision trigger compares against. Kept rows are updated rather than deleted
+// and inserted again, so a decision waiting to lock one finds it (a deleted row would read as RG007).
+// A reviewer who loses the role becomes a 'user' waiting for staff approval, not an approved researcher.
+async function applyAccess(tx: Transaction, row: User, access: AccessSync): Promise<User> {
+  const role = access.roleFor(row.role);
+  let user = row;
+  if (role !== row.role) {
+    const changes: Partial<User> = { role, updatedAt: new Date() };
+    if (row.role === "reviewer" && row.approvalStatus === "approved") changes.approvalStatus = "pending";
+    [user] = await tx.update(users).set(changes).where(eq(users.id, row.id)).returning();
+  }
+
+  const projectIds = role === "reviewer" ? access.projectIds : [];
+  await tx.delete(reviewerProjects).where(
+    projectIds.length > 0
+      ? and(eq(reviewerProjects.userId, row.id), notInArray(reviewerProjects.projectId, projectIds))
+      : eq(reviewerProjects.userId, row.id),
+  );
+  if (projectIds.length > 0) {
+    await tx
+      .insert(reviewerProjects)
+      .values(projectIds.map((projectId) => ({ userId: row.id, projectId })))
+      .onConflictDoUpdate({
+        target: [reviewerProjects.userId, reviewerProjects.projectId],
+        set: { syncedAt: sql`now()` },
+      });
+  }
+  return user;
+}
 
 export interface IStorage {
   // User methods
   getUser(id: string): Promise<User | undefined>;
   getUserByExternalId(externalId: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
+  getUsersByEmail(email: string): Promise<User[]>;
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: string, updates: Partial<User>): Promise<User>;
   getAllUsers(): Promise<User[]>;
   getPendingUsers(): Promise<User[]>;
   approveUser(userId: string, approverId: string): Promise<User>;
   rejectUser(userId: string): Promise<User>;
+
+  // Keycloak role sync methods
+  saveKeycloakUser(userId: string | null, profile: KeycloakProfile, access: AccessSync): Promise<AccessSyncResult>;
+  syncReviewerAccess(userId: string, access: AccessSync): Promise<AccessSyncResult | undefined>;
+  getReviewerProjects(userId: string): Promise<ReviewerProject[]>;
 
   // Workspace methods
   getWorkspace(id: string): Promise<Workspace | undefined>;
@@ -132,12 +226,13 @@ export interface IStorage {
   // Output-release gate methods
   getJobOutputs(jobIds: string[]): Promise<JobOutput[]>;
   getReleaseDecisions(jobIds: string[]): Promise<ReleaseDecision[]>;
-  getReviewJobs(filter: ReviewJobFilter): Promise<ReviewJobSummary[]>;
-  getReviewJob(jobId: string): Promise<ReviewJobDetail | undefined>;
+  getReviewJobs(reviewerId: string, filter: ReviewJobFilter): Promise<ReviewJobSummary[]>;
+  getReviewJob(reviewerId: string, jobId: string): Promise<ReviewJobDetail | undefined>;
   recordReleaseDecision(input: NewReleaseDecision): Promise<{
     decision: ReleaseDecision;
     releaseStatus: "released" | "withheld";
   }>;
+  getReviewRouting(): Promise<ReviewRouting>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -155,6 +250,11 @@ export class DatabaseStorage implements IStorage {
   async getUserByEmail(email: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.email, email));
     return user;
+  }
+
+  // Case-insensitive: Keycloak stores emails in lower case, rows from before Keycloak may not be
+  async getUsersByEmail(email: string): Promise<User[]> {
+    return db.select().from(users).where(sql`lower(${users.email}) = lower(${email})`).orderBy(asc(users.createdAt));
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
@@ -206,6 +306,56 @@ export class DatabaseStorage implements IStorage {
       .where(eq(users.id, userId))
       .returning();
     return user;
+  }
+
+  // Keycloak role sync methods
+  /**
+   * Writes a Keycloak login in one transaction: creates the user (userId null) or updates the matched row's
+   * identity and profile, then sets the role and the reviewer_projects mirror.
+   */
+  async saveKeycloakUser(userId: string | null, profile: KeycloakProfile, access: AccessSync): Promise<AccessSyncResult> {
+    return db.transaction(async (tx) => {
+      if (!userId) {
+        const [created] = await tx
+          .insert(users)
+          .values({ ...profile, role: access.roleFor("user"), approvalStatus: "approved" })
+          .returning();
+        return { user: await applyAccess(tx, created, access), previousRole: null };
+      }
+
+      const [row] = await tx.select().from(users).where(eq(users.id, userId)).for("no key update");
+      if (!row) throw new Error(`User ${userId} no longer exists`);
+      const changes: Partial<User> = {};
+      for (const field of ["externalId", "username", "email", "fullName"] as const) {
+        if (row[field] !== profile[field]) changes[field] = profile[field];
+      }
+      let user = row;
+      if (Object.keys(changes).length > 0) {
+        [user] = await tx.update(users).set({ ...changes, updatedAt: new Date() }).where(eq(users.id, userId)).returning();
+      }
+      return { user: await applyAccess(tx, user, access), previousRole: row.role };
+    });
+  }
+
+  /**
+   * Re-check of a signed-in account: sets the role and the reviewer_projects mirror in one transaction.
+   * Both writers lock the user row FOR NO KEY UPDATE: it still serialises them, but does not block the
+   * FOR KEY SHARE that a concurrent decision's foreign key check takes on it (that would deadlock).
+   */
+  async syncReviewerAccess(userId: string, access: AccessSync): Promise<AccessSyncResult | undefined> {
+    return db.transaction(async (tx) => {
+      const [row] = await tx.select().from(users).where(eq(users.id, userId)).for("no key update");
+      if (!row) return undefined;
+      return { user: await applyAccess(tx, row, access), previousRole: row.role };
+    });
+  }
+
+  async getReviewerProjects(userId: string): Promise<ReviewerProject[]> {
+    return db
+      .select()
+      .from(reviewerProjects)
+      .where(eq(reviewerProjects.userId, userId))
+      .orderBy(asc(reviewerProjects.projectId));
   }
 
   // Workspace methods
@@ -440,7 +590,7 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(releaseDecisions).where(inArray(releaseDecisions.jobId, jobIds));
   }
 
-  async getReviewJobs(filter: ReviewJobFilter): Promise<ReviewJobSummary[]> {
+  async getReviewJobs(reviewerId: string, filter: ReviewJobFilter): Promise<ReviewJobSummary[]> {
     const reviewers = alias(users, "reviewers");
     const query = db
       .select({
@@ -452,6 +602,8 @@ export class DatabaseStorage implements IStorage {
           completedAt: jobRequests.completedAt,
           aiDecision: jobRequests.aiDecision,
           executionMetrics: jobRequests.executionMetrics,
+          projectId: jobRequests.projectId,
+          archetypeId: jobRequests.archetypeId,
         },
         submitter: { id: users.id, username: users.username, fullName: users.fullName },
         workspace: {
@@ -462,6 +614,8 @@ export class DatabaseStorage implements IStorage {
         },
         output: {
           kind: jobOutputs.kind,
+          contentSha256: jobOutputs.contentSha256,
+          attestedOutputHash: jobOutputs.attestedOutputHash,
           sizeBytes: sql<number>`octet_length(${jobOutputs.content})`.mapWith(Number),
         },
         decision: releaseDecisions,
@@ -474,18 +628,19 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(releaseDecisions, eq(releaseDecisions.jobId, jobRequests.jobId))
       .leftJoin(reviewers, eq(reviewers.id, releaseDecisions.reviewerId));
 
+    const scope = reviewerScope(reviewerId);
     const pending = eq(jobRequests.releaseStatus, "pending");
     const decided = isNotNull(releaseDecisions.id);
     if (filter === "pending") {
-      return query.where(pending).orderBy(asc(jobRequests.completedAt));
+      return query.where(and(scope, pending)).orderBy(asc(jobRequests.completedAt));
     }
     if (filter === "decided") {
-      return query.where(decided).orderBy(desc(releaseDecisions.decidedAt));
+      return query.where(and(scope, decided)).orderBy(desc(releaseDecisions.decidedAt));
     }
-    return query.where(or(pending, decided)).orderBy(desc(jobRequests.completedAt));
+    return query.where(and(scope, or(pending, decided))).orderBy(desc(jobRequests.completedAt));
   }
 
-  async getReviewJob(jobId: string): Promise<ReviewJobDetail | undefined> {
+  async getReviewJob(reviewerId: string, jobId: string): Promise<ReviewJobDetail | undefined> {
     const reviewers = alias(users, "reviewers");
     const [row] = await db
       .select({
@@ -497,6 +652,8 @@ export class DatabaseStorage implements IStorage {
           completedAt: jobRequests.completedAt,
           aiDecision: jobRequests.aiDecision,
           executionMetrics: jobRequests.executionMetrics,
+          projectId: jobRequests.projectId,
+          archetypeId: jobRequests.archetypeId,
           commitSha: jobRequests.commitSha,
           verificationReceipt: jobRequests.verificationReceipt,
           validationStatus: jobRequests.validationStatus,
@@ -512,6 +669,7 @@ export class DatabaseStorage implements IStorage {
         output: jobOutputs,
         decision: releaseDecisions,
         reviewer: { id: reviewers.id, username: reviewers.username, fullName: reviewers.fullName },
+        allowUnattestedRelease: sql<boolean>`coalesce(current_setting('epsilon.allow_unattested_release', true), 'off') = 'on'`,
       })
       .from(jobRequests)
       .innerJoin(users, eq(jobRequests.userId, users.id))
@@ -519,13 +677,14 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(jobOutputs, eq(jobOutputs.jobId, jobRequests.jobId))
       .leftJoin(releaseDecisions, eq(releaseDecisions.jobId, jobRequests.jobId))
       .leftJoin(reviewers, eq(reviewers.id, releaseDecisions.reviewerId))
-      .where(eq(jobRequests.jobId, jobId));
+      .where(and(eq(jobRequests.jobId, jobId), reviewerScope(reviewerId)));
     return row;
   }
 
   /**
    * Records a reviewer's decision and moves the job to released/withheld in one transaction.
-   * The rules are checked here first; the database triggers enforce them again.
+   * The rules are checked here first (a job outside the reviewer's projects is not found);
+   * the database triggers enforce them again.
    */
   async recordReleaseDecision(input: NewReleaseDecision): Promise<{
     decision: ReleaseDecision;
@@ -541,7 +700,7 @@ export class DatabaseStorage implements IStorage {
           })
           .from(jobRequests)
           .innerJoin(workspaces, eq(jobRequests.workspaceId, workspaces.id))
-          .where(eq(jobRequests.jobId, input.jobId))
+          .where(and(eq(jobRequests.jobId, input.jobId), reviewerScope(input.reviewerId)))
           .for("update", { of: jobRequests });
         if (!job) throw new ReleaseDecisionError("not_found");
         if (job.userId === input.reviewerId || job.workspaceOwnerId === input.reviewerId) {
@@ -565,6 +724,62 @@ export class DatabaseStorage implements IStorage {
       const reason = RELEASE_GATE_SQLSTATES.get((error as { code?: string } | null)?.code ?? "");
       throw reason ? new ReleaseDecisionError(reason) : error;
     }
+  }
+
+  /**
+   * Pending review load per project and how many approved reviewers each project has (counts only).
+   */
+  async getReviewRouting(): Promise<ReviewRouting> {
+    const [pending, reviewers] = await Promise.all([
+      db
+        .select({
+          projectId: jobRequests.projectId,
+          pendingCount: count(),
+          oldestPendingCompletedAt: sql<Date | null>`min(${jobRequests.completedAt})`.mapWith(jobRequests.completedAt),
+        })
+        .from(jobRequests)
+        .where(eq(jobRequests.releaseStatus, "pending"))
+        .groupBy(jobRequests.projectId),
+      db
+        .select({ projectId: reviewerProjects.projectId, reviewerCount: count() })
+        .from(reviewerProjects)
+        .innerJoin(users, eq(users.id, reviewerProjects.userId))
+        .where(and(eq(users.role, "reviewer"), eq(users.approvalStatus, "approved")))
+        .groupBy(reviewerProjects.projectId),
+    ]);
+
+    const projects = new Map<string, ReviewRouting["projects"][number]>();
+    const entry = (projectId: string) => {
+      let project = projects.get(projectId);
+      if (!project) {
+        project = { projectId, pendingCount: 0, oldestPendingCompletedAt: null, reviewerCount: 0 };
+        projects.set(projectId, project);
+      }
+      return project;
+    };
+    let pendingWithoutProject = 0;
+    for (const row of pending) {
+      if (!row.projectId) {
+        pendingWithoutProject = Number(row.pendingCount);
+        continue;
+      }
+      const project = entry(row.projectId);
+      project.pendingCount = Number(row.pendingCount);
+      project.oldestPendingCompletedAt = row.oldestPendingCompletedAt;
+    }
+    for (const row of reviewers) {
+      entry(row.projectId).reviewerCount = Number(row.reviewerCount);
+    }
+
+    // Longest-waiting first; projects with nothing pending last
+    const waitedSince = (project: ReviewRouting["projects"][number]) =>
+      project.oldestPendingCompletedAt?.getTime() ?? Number.POSITIVE_INFINITY;
+    return {
+      projects: Array.from(projects.values()).sort(
+        (a, b) => waitedSince(a) - waitedSince(b) || a.projectId.localeCompare(b.projectId),
+      ),
+      pendingWithoutProject,
+    };
   }
 }
 

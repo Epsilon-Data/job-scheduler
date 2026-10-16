@@ -17,6 +17,19 @@ BEGIN
     RETURN NEW;
 END $$;
 
+-- Name: job_requests_project_guard(); Type: FUNCTION; Schema: public; Owner: -
+
+CREATE FUNCTION public.job_requests_project_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    IF (OLD.project_id IS NOT NULL AND NEW.project_id IS DISTINCT FROM OLD.project_id)
+       OR (OLD.archetype_id IS NOT NULL AND NEW.archetype_id IS DISTINCT FROM OLD.archetype_id) THEN
+        RAISE EXCEPTION 'job %: the recorded project cannot change', OLD.job_id USING ERRCODE = 'RG025';
+    END IF;
+    RETURN NEW;
+END $$;
+
 -- Name: job_requests_release_guard(); Type: FUNCTION; Schema: public; Owner: -
 
 CREATE FUNCTION public.job_requests_release_guard() RETURNS trigger
@@ -59,14 +72,19 @@ CREATE FUNCTION public.release_decisions_before_insert() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
 DECLARE
-    v_job_user       uuid;
-    v_ws_user        uuid;
-    v_release_status varchar;
-    v_reviewer_role  varchar;
-    v_content_sha    varchar;
+    v_job_user        uuid;
+    v_ws_user         uuid;
+    v_release_status  varchar;
+    v_project         uuid;
+    v_reviewer_role   varchar;
+    v_reviewer_status varchar;
+    v_synced_at       timestamptz;
+    v_kind            varchar;
+    v_content_sha     varchar;
+    v_attested        varchar;
 BEGIN
-    SELECT jr.user_id, w.user_id, jr.release_status
-      INTO v_job_user, v_ws_user, v_release_status
+    SELECT jr.user_id, w.user_id, jr.release_status, jr.project_id
+      INTO v_job_user, v_ws_user, v_release_status, v_project
       FROM job_requests jr
       JOIN workspaces w ON w.id = jr.workspace_id
      WHERE jr.job_id = NEW.job_id
@@ -79,9 +97,9 @@ BEGIN
         RAISE EXCEPTION 'release decision: a reviewer cannot decide on their own job' USING ERRCODE = 'RG001';
     END IF;
 
-    SELECT role INTO v_reviewer_role FROM users WHERE id = NEW.reviewer_id;
-    IF v_reviewer_role IS DISTINCT FROM 'reviewer' THEN
-        RAISE EXCEPTION 'release decision: user % is not a reviewer', NEW.reviewer_id USING ERRCODE = 'RG002';
+    SELECT role, approval_status INTO v_reviewer_role, v_reviewer_status FROM users WHERE id = NEW.reviewer_id;
+    IF v_reviewer_role IS DISTINCT FROM 'reviewer' OR v_reviewer_status IS DISTINCT FROM 'approved' THEN
+        RAISE EXCEPTION 'release decision: user % is not an approved reviewer', NEW.reviewer_id USING ERRCODE = 'RG002';
     END IF;
 
     IF v_release_status IS DISTINCT FROM 'pending' THEN
@@ -89,11 +107,38 @@ BEGIN
               USING ERRCODE = 'RG003';
     END IF;
 
-    SELECT content_sha256 INTO v_content_sha FROM job_outputs WHERE job_id = NEW.job_id FOR SHARE;
+    IF v_project IS NULL THEN
+        RAISE EXCEPTION 'release decision: job % has no project, so it cannot be routed to a reviewer', NEW.job_id
+              USING ERRCODE = 'RG006';
+    END IF;
+
+    SELECT synced_at INTO v_synced_at
+      FROM reviewer_projects
+     WHERE user_id = NEW.reviewer_id AND project_id = v_project
+       FOR SHARE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'release decision: user % is not a reviewer of project %', NEW.reviewer_id, v_project
+              USING ERRCODE = 'RG007';
+    END IF;
+    IF v_synced_at < now() - interval '5 minutes' THEN
+        RAISE EXCEPTION 'release decision: the reviewer assignment of user % was not confirmed in the last 5 minutes', NEW.reviewer_id
+              USING ERRCODE = 'RG008';
+    END IF;
+
+    SELECT kind, content_sha256, attested_output_hash INTO v_kind, v_content_sha, v_attested
+      FROM job_outputs WHERE job_id = NEW.job_id FOR SHARE;
     IF v_content_sha IS NULL OR v_content_sha <> NEW.output_sha256 THEN
         RAISE EXCEPTION 'release decision: output hash does not match the held output' USING ERRCODE = 'RG004';
     END IF;
 
+    IF NEW.decision = 'approve' AND v_kind = 'result'
+       AND (v_attested IS NULL OR v_attested <> v_content_sha)
+       AND coalesce(current_setting('epsilon.allow_unattested_release', true), 'off') <> 'on' THEN
+        RAISE EXCEPTION 'release decision: the held result of job % does not match its attested output hash', NEW.job_id
+              USING ERRCODE = 'RG009';
+    END IF;
+
+    NEW.project_id := v_project;
     RETURN NEW;
 END $$;
 
@@ -184,6 +229,8 @@ CREATE TABLE public.job_requests (
     release_status character varying(20),
     ai_decision character varying(32),
     output_sha256 character varying(64),
+    project_id uuid,
+    archetype_id character varying(255),
     CONSTRAINT job_requests_output_sha256_check CHECK (((output_sha256 IS NULL) OR ((output_sha256)::text ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT job_requests_release_status_check CHECK (((release_status IS NULL) OR ((release_status)::text = ANY ((ARRAY['pending'::character varying, 'released'::character varying, 'withheld'::character varying, 'not_required'::character varying])::text[]))))
 );
@@ -198,9 +245,18 @@ CREATE TABLE public.release_decisions (
     reviewer_id uuid NOT NULL,
     reason text,
     decided_at timestamp with time zone DEFAULT now() NOT NULL,
+    project_id uuid,
     CONSTRAINT release_decisions_decision_check CHECK (((decision)::text = ANY ((ARRAY['approve'::character varying, 'reject'::character varying])::text[]))),
     CONSTRAINT release_decisions_output_sha256_check CHECK (((output_sha256)::text ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT release_decisions_reason_required CHECK ((((decision)::text = 'approve'::text) OR ((reason IS NOT NULL) AND (length(btrim(reason)) > 0))))
+);
+
+-- Name: reviewer_projects; Type: TABLE; Schema: public; Owner: -
+
+CREATE TABLE public.reviewer_projects (
+    user_id uuid NOT NULL,
+    project_id uuid NOT NULL,
+    synced_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 -- Name: users; Type: TABLE; Schema: public; Owner: -
@@ -273,6 +329,11 @@ ALTER TABLE ONLY public.release_decisions
 ALTER TABLE ONLY public.release_decisions
     ADD CONSTRAINT release_decisions_pkey PRIMARY KEY (id);
 
+-- Name: reviewer_projects reviewer_projects_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+
+ALTER TABLE ONLY public.reviewer_projects
+    ADD CONSTRAINT reviewer_projects_pkey PRIMARY KEY (user_id, project_id);
+
 -- Name: users users_external_id_unique; Type: CONSTRAINT; Schema: public; Owner: -
 
 ALTER TABLE ONLY public.users
@@ -292,13 +353,25 @@ ALTER TABLE ONLY public.workspaces
 
 CREATE INDEX ix_job_requests_job_id_committed ON public.job_requests USING btree (job_id_committed);
 
+-- Name: ix_job_requests_project_release; Type: INDEX; Schema: public; Owner: -
+
+CREATE INDEX ix_job_requests_project_release ON public.job_requests USING btree (project_id, release_status);
+
 -- Name: ix_job_requests_release_status; Type: INDEX; Schema: public; Owner: -
 
 CREATE INDEX ix_job_requests_release_status ON public.job_requests USING btree (release_status);
 
+-- Name: ix_reviewer_projects_project; Type: INDEX; Schema: public; Owner: -
+
+CREATE INDEX ix_reviewer_projects_project ON public.reviewer_projects USING btree (project_id);
+
 -- Name: job_outputs job_outputs_guard; Type: TRIGGER; Schema: public; Owner: -
 
 CREATE TRIGGER job_outputs_guard BEFORE DELETE OR UPDATE ON public.job_outputs FOR EACH ROW EXECUTE FUNCTION public.job_outputs_guard();
+
+-- Name: job_requests job_requests_project_guard; Type: TRIGGER; Schema: public; Owner: -
+
+CREATE TRIGGER job_requests_project_guard BEFORE UPDATE OF project_id, archetype_id ON public.job_requests FOR EACH ROW EXECUTE FUNCTION public.job_requests_project_guard();
 
 -- Name: job_requests job_requests_release_guard; Type: TRIGGER; Schema: public; Owner: -
 
@@ -341,6 +414,11 @@ ALTER TABLE ONLY public.release_decisions
 
 ALTER TABLE ONLY public.release_decisions
     ADD CONSTRAINT release_decisions_reviewer_id_fkey FOREIGN KEY (reviewer_id) REFERENCES public.users(id);
+
+-- Name: reviewer_projects reviewer_projects_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+
+ALTER TABLE ONLY public.reviewer_projects
+    ADD CONSTRAINT reviewer_projects_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 
 -- Name: workspaces workspaces_user_id_users_id_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
 

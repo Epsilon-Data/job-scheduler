@@ -21,7 +21,7 @@ async function runSql(connectionString: string, statements: string) {
 
 /**
  * Creates a throwaway database from TEST_DATABASE_URL (an admin URL) for this run and drops it afterwards.
- * The schema is the post-migration contract (coordinator revision 7f3a9c2d1e4b), triggers included.
+ * The schema is the post-migration contract (coordinator revision c5e2a8d4b7f1), triggers included.
  */
 export default async function setup({ provide }: TestProject) {
   const adminUrl = process.env.TEST_DATABASE_URL;

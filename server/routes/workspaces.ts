@@ -2,13 +2,13 @@ import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema } from "@shared/schema";
 import { githubApi } from "../github";
-import { requireAuth, asyncHandler, NotFoundError, ForbiddenError } from "../middleware";
+import { requireAuth, requireResearcher, asyncHandler, NotFoundError, ForbiddenError } from "../middleware";
 import { toResearcherJob, toResearcherJobs } from "../release";
 
 const router = Router();
 
-// Apply auth middleware to all routes
-router.use(requireAuth);
+// Apply auth middleware to all routes (researcher accounts only)
+router.use(requireAuth, requireResearcher);
 
 /**
  * Get all workspaces for current user with job counts

@@ -2,7 +2,7 @@ import { Router } from "express";
 import { storage } from "../storage";
 import { type JobLogEntry } from "@shared/schema";
 import { githubApi } from "../github";
-import { requireAuth, asyncHandler, NotFoundError, ForbiddenError } from "../middleware";
+import { requireAuth, requireResearcher, asyncHandler, NotFoundError, ForbiddenError } from "../middleware";
 import { toResearcherJob, toResearcherJobs, stripLogErrorDetails } from "../release";
 
 const router = Router();
@@ -15,7 +15,7 @@ const router = Router();
  *   - limit: number (default: 10, max: 100)
  *   - status: string (optional, filter by job status)
  */
-router.get("/user/jobs", requireAuth, asyncHandler(async (req, res) => {
+router.get("/user/jobs", requireAuth, requireResearcher, asyncHandler(async (req, res) => {
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 10;
     const status = req.query.status as string | undefined;
@@ -32,7 +32,7 @@ router.get("/user/jobs", requireAuth, asyncHandler(async (req, res) => {
  * Get job by jobId (JOB-XXXXX format)
  * GET /api/jobs/:jobId
  */
-router.get("/jobs/:jobId", requireAuth, asyncHandler(async (req, res) => {
+router.get("/jobs/:jobId", requireAuth, requireResearcher, asyncHandler(async (req, res) => {
     // Expects jobId format (JOB-XXXXX)
     const row = await storage.getJobRequestByJobId(req.params.jobId);
 
@@ -124,7 +124,7 @@ router.get("/jobs/:jobId", requireAuth, asyncHandler(async (req, res) => {
  * List all jobs for current user (job-server compatible)
  * GET /api/jobs
  */
-router.get("/jobs", requireAuth, asyncHandler(async (req, res) => {
+router.get("/jobs", requireAuth, requireResearcher, asyncHandler(async (req, res) => {
     const jobRequests = await toResearcherJobs(await storage.getJobRequestsByUserId(req.session.userId!));
 
     const jobsWithWorkspace = await Promise.all(
@@ -164,7 +164,7 @@ router.get("/jobs", requireAuth, asyncHandler(async (req, res) => {
  * Create a new job (job-server compatible)
  * POST /api/jobs
  */
-router.post("/jobs", requireAuth, asyncHandler(async (req, res) => {
+router.post("/jobs", requireAuth, requireResearcher, asyncHandler(async (req, res) => {
     const { github_repo, branch_name } = req.body;
 
     if (!github_repo || !branch_name) {

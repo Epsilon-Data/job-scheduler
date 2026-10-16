@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { storage } from "../storage";
 import { asyncHandler } from "./errorHandler";
+import { ensureFreshReviewer, endSession } from "../roleSync";
 import type { User } from "@shared/schema";
 
 // Extend Express Request type to include session and user
@@ -10,10 +11,14 @@ declare module "express-serve-static-core" {
             userId?: string;
             accessToken?: string;  // GitHub access token (for repo access)
             apiToken?: string;     // Keycloak JWT (for identity)
+            idToken?: string;      // Keycloak ID token (logout hint)
+            refreshToken?: string; // Keycloak refresh token (reviewer re-checks)
+            rolesCheckedAt?: number;  // When Keycloak last confirmed the role (ms since epoch)
             oauthState?: string;
             githubOAuthState?: string;  // State for GitHub OAuth flow
             destroy: (callback: (err: any) => void) => void;
             save: (callback: (err: any) => void) => void;
+            regenerate: (callback: (err: any) => void) => void;
         };
         user?: User;
     }
@@ -83,9 +88,13 @@ export const requireStaff = async (
     next();
 };
 
+const isApprovedReviewer = (user: User | undefined): user is User =>
+    user?.role === "reviewer" && user.approvalStatus === "approved";
+
 /**
  * Middleware to require an approved reviewer (output-release gate)
- * Only "reviewer" qualifies; staff do not. A failed user lookup goes to the error handler.
+ * Only "reviewer" qualifies; staff do not. The role is confirmed with Keycloak when the last check is stale,
+ * and always before a write (or with ?refresh=1). A failed user lookup goes to the error handler.
  */
 export const requireReviewer = asyncHandler(async (
     req: Request,
@@ -98,8 +107,60 @@ export const requireReviewer = asyncHandler(async (
     }
 
     const user = req.user || await storage.getUser(req.session.userId);
-    if (!user || user.role !== "reviewer" || user.approvalStatus !== "approved") {
+    if (!isApprovedReviewer(user)) {
         res.status(403).json({ message: "Insufficient permissions" });
+        return;
+    }
+    req.user = user;
+
+    const check = await ensureFreshReviewer(req, { force: req.method !== "GET" || req.query.refresh === "1" });
+    if (check.status === "reauth") {
+        await endSession(req);
+        res.status(401).json({ message: "Your sign-in has expired. Sign in again.", code: "REAUTH_REQUIRED" });
+        return;
+    }
+    if (check.status === "unavailable") {
+        res.status(503).json({
+            message: "Your reviewer access could not be confirmed with Keycloak. Try again shortly.",
+            code: "KEYCLOAK_UNAVAILABLE",
+        });
+        return;
+    }
+    // Demoted (or revoked) in Keycloak since the last check
+    if (!isApprovedReviewer(check.user)) {
+        res.status(403).json({ message: "Insufficient permissions" });
+        return;
+    }
+
+    req.user = check.user;
+    next();
+});
+
+/**
+ * Middleware for researcher features (workspaces, jobs, GitHub): approved users and staff.
+ * Reviewer accounts only review. A failed user lookup goes to the error handler.
+ */
+export const requireResearcher = asyncHandler(async (
+    req: Request,
+    res: Response,
+    next: NextFunction
+): Promise<void> => {
+    if (!req.session.userId) {
+        res.status(401).json({ message: "Not authenticated" });
+        return;
+    }
+
+    const user = req.user || await storage.getUser(req.session.userId);
+    if (!user) {
+        res.status(401).json({ message: "Not authenticated" });
+        return;
+    }
+    if (user.role === "reviewer") {
+        res.status(403).json({ message: "Reviewer accounts cannot use researcher features", code: "REVIEWER_ACCOUNT" });
+        return;
+    }
+    if (user.approvalStatus !== "approved") {
+        res.status(403).json({ message: "Your account has not been approved", code: "NOT_APPROVED" });
         return;
     }
 

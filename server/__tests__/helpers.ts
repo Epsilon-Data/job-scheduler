@@ -1,42 +1,198 @@
-import express, { type Express } from "express";
+import express, { type Express, type RequestHandler } from "express";
+import session from "express-session";
+import type { Server } from "http";
 import type pg from "pg";
 import { createHash, randomUUID } from "crypto";
+import { vi } from "vitest";
 import { HELD_ERROR_MESSAGE } from "@shared/schema";
 import { pool } from "../db";
 import { registerRoutes } from "../routes";
 import { errorHandler } from "../middleware";
+import { setRecheckRetryDelayMs } from "../roleSync";
 
 export const TEST_USER_HEADER = "x-test-user";
 
+// Jobs and reviewers made by these helpers belong to this project unless a test says otherwise
+export const TEST_PROJECT_ID = randomUUID();
+
+export const REVIEWER_ROLE = "output-reviewer";
+export const KEYCLOAK_CLIENT_ID = "jobscheduler-oauth";
+const KEYCLOAK_CLIENT_SECRET = "test-client-secret";
+// .invalid never resolves: nothing can reach a real Keycloak even if the mock is bypassed
+const KEYCLOAK_TOKEN_URL = "http://keycloak.invalid/realms/epsilon/protocol/openid-connect/token";
+const KEYCLOAK_AUTH_URL = "http://keycloak.invalid/realms/epsilon/protocol/openid-connect/auth";
+
+export interface KeycloakAccount {
+  sub: string;
+  email: string;
+  emailVerified: boolean;
+  roles: string[];
+  groups: string[];
+  username?: string;
+  name?: string;
+  sid?: string;
+  azp?: string;
+}
+
+// A canned token-endpoint reply, used before the normal behaviour
+export type KeycloakReply =
+  | { status: number; body?: unknown }
+  | { network: true };
+
+const base64url = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+
+export const makeJwt = (claims: Record<string, unknown>) =>
+  `${base64url({ alg: "RS256", typ: "JWT" })}.${base64url(claims)}.not-checked`;
+
+export function accessTokenClaims(account: KeycloakAccount): Record<string, unknown> {
+  return {
+    sub: account.sub,
+    azp: account.azp ?? KEYCLOAK_CLIENT_ID,
+    email: account.email,
+    email_verified: account.emailVerified,
+    preferred_username: account.username ?? account.email,
+    name: account.name ?? "Test Person",
+    sid: account.sid,
+    realm_access: { roles: ["default-roles-epsilon", ...account.roles] },
+    epsilon_groups: account.groups,
+  };
+}
+
 /**
- * Builds the API the way server/index.ts does (no vite, no listening). Test-only stand-in for
- * express-session: the x-test-user header carries the logged-in user's id.
+ * Stand-in for Keycloak's token endpoint, the only fetch the server may make in tests. An account is found by
+ * its key: login codes are `code:<key>` and refresh tokens `rt:<key>`. The stub session's refresh token is
+ * `rt:<user id>`, so createUser registers each user's account under its id.
  */
-export async function createTestApp(): Promise<Express> {
+export const keycloak = {
+  accounts: new Map<string, KeycloakAccount>(),
+  requests: [] as Record<string, string>[],
+  replies: [] as KeycloakReply[],
+  // While set, the token endpoint answers only once this settles
+  hold: null as Promise<unknown> | null,
+
+  refreshCalls(key?: string): number {
+    return this.requests.filter(
+      (form) => form.grant_type === "refresh_token" && (key === undefined || form.refresh_token === `rt:${key}`),
+    ).length;
+  },
+
+  reset() {
+    this.requests.length = 0;
+    this.replies.length = 0;
+    this.hold = null;
+  },
+};
+
+const jsonResponse = (status: number, body: unknown) =>
+  new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+
+async function keycloakFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  if (url !== KEYCLOAK_TOKEN_URL) {
+    throw new Error(`Unexpected fetch in tests: ${url}`);
+  }
+  const form = Object.fromEntries(new URLSearchParams(String(init?.body ?? "")));
+  keycloak.requests.push(form);
+  if (keycloak.hold) await keycloak.hold;
+
+  const reply = keycloak.replies.shift();
+  if (reply && "network" in reply) throw new TypeError("fetch failed");
+  if (reply) return jsonResponse(reply.status, reply.body ?? {});
+
+  const [prefix, key] =
+    form.grant_type === "authorization_code" ? ["code:", form.code] : ["rt:", form.refresh_token];
+  const account = key?.startsWith(prefix) ? keycloak.accounts.get(key.slice(prefix.length)) : undefined;
+  if (form.client_id !== KEYCLOAK_CLIENT_ID || form.client_secret !== KEYCLOAK_CLIENT_SECRET) {
+    return jsonResponse(401, { error: "unauthorized_client" });
+  }
+  if (!account) {
+    return jsonResponse(400, { error: "invalid_grant", error_description: "Token is not active" });
+  }
+  return jsonResponse(200, {
+    access_token: makeJwt(accessTokenClaims(account)),
+    refresh_token: `rt:${key.slice(prefix.length)}`,
+    id_token: makeJwt({ sub: account.sub }),
+    token_type: "Bearer",
+    expires_in: 300,
+  });
+}
+
+export function installKeycloakMock() {
+  Object.assign(process.env, {
+    KEYCLOAK_TOKEN_URL,
+    KEYCLOAK_AUTH_URL,
+    KEYCLOAK_CLIENT_ID,
+    KEYCLOAK_CLIENT_SECRET,
+    KEYCLOAK_REDIRECT_URI: "http://127.0.0.1/api/auth/callback",
+  });
+  delete process.env.KEYCLOAK_REVIEWER_ROLE;
+  delete process.env.REVIEWER_ROLE_RECHECK_SECONDS;
+  setRecheckRetryDelayMs(0);
+  vi.stubGlobal("fetch", keycloakFetch);
+}
+
+async function buildApp(sessionMiddleware: RequestHandler): Promise<Express> {
+  installKeycloakMock();
   const app = express();
   app.use(express.json());
   app.use(express.urlencoded({ extended: false }));
-  app.use((req, _res, next) => {
+  app.use(sessionMiddleware);
+  await registerRoutes(app);
+  app.use(errorHandler);
+  return app;
+}
+
+/**
+ * Builds the API the way server/index.ts does (no vite, no listening). Test-only stand-in for
+ * express-session: the x-test-user header carries the logged-in user's id, and every request starts
+ * with a role check that is due, so reviewers are re-checked with the Keycloak mock each time.
+ */
+export function createTestApp(): Promise<Express> {
+  return buildApp((req, _res, next) => {
+    const userId = req.header(TEST_USER_HEADER) || undefined;
+    req.sessionID = `test-session-${userId ?? "anonymous"}`;
     req.session = {
-      userId: req.header(TEST_USER_HEADER) || undefined,
+      userId,
+      refreshToken: userId ? `rt:${userId}` : undefined,
       destroy(callback) {
         callback(null);
       },
       save(callback) {
         callback(null);
       },
+      regenerate(callback) {
+        callback(null);
+      },
     };
     next();
   });
-  await registerRoutes(app);
-  app.use(errorHandler);
-  return app;
+}
+
+// The real express-session (in-memory store), for login and re-check tests driven by a supertest agent
+export function createSessionApp(): Promise<Express> {
+  return buildApp(session({
+    secret: "test-session-secret",
+    resave: false,
+    saveUninitialized: true,
+    cookie: { httpOnly: true, sameSite: "lax" },
+  }));
+}
+
+// supertest's own app.listen(0) binds every interface but then requests 127.0.0.1:<port>, which can reach
+// another local process holding that port on 127.0.0.1; one loopback-bound server avoids that
+export function listen(app: Express): Promise<Server> {
+  return new Promise<Server>((resolve) => {
+    const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
+  });
 }
 
 export const sha256 = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
 
 export const query = <R extends pg.QueryResultRow = any>(text: string, params?: unknown[]) =>
   pool.query<R>(text, params);
+
+// A connection of its own, for a test that holds a transaction open while the server works
+export const connectClient = () => pool.connect();
 
 // Tests write straight to the database: refuse anything but a throwaway rg_rw_* database
 export async function assertThrowawayDatabase() {
@@ -64,17 +220,50 @@ async function inTransaction(work: (client: pg.PoolClient) => Promise<void>) {
   }
 }
 
+export interface UserOptions {
+  projects?: string[]; // a reviewer's projects (default: TEST_PROJECT_ID)
+  externalId?: string;
+  email?: string;
+}
+
+/**
+ * A user row plus its Keycloak account. A reviewer holds the role and the groups of its projects, and its
+ * reviewer_projects mirror is as fresh as right after a login.
+ */
 export async function createUser(
   role: "user" | "reviewer" | "staff" = "user",
   approvalStatus: "approved" | "pending" | "rejected" = "approved",
+  options: UserOptions = {},
 ): Promise<string> {
   const id = randomUUID();
+  const externalId = options.externalId ?? `ext-${id}`;
+  const email = options.email ?? `${id}@example.test`;
   await query(
     `INSERT INTO users (id, external_id, username, email, full_name, role, approval_status)
      VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [id, `ext-${id}`, `${role}-${id.slice(0, 8)}`, `${id}@example.test`, `Test ${role}`, role, approvalStatus],
+    [id, externalId, `${role}-${id.slice(0, 8)}`, email, `Test ${role}`, role, approvalStatus],
   );
+
+  const projects = role === "reviewer" ? options.projects ?? [TEST_PROJECT_ID] : [];
+  for (const projectId of projects) {
+    await query("INSERT INTO reviewer_projects (user_id, project_id) VALUES ($1, $2)", [id, projectId]);
+  }
+  keycloak.accounts.set(id, {
+    sub: externalId,
+    email,
+    emailVerified: true,
+    roles: role === "reviewer" ? [REVIEWER_ROLE] : [],
+    groups: projects.map((projectId) => `/Reviewers of ${projectId}`),
+  });
   return id;
+}
+
+export async function reviewerProjectRows(userId: string): Promise<{ project_id: string; synced_at: Date }[]> {
+  const { rows } = await query(
+    "SELECT project_id, synced_at FROM reviewer_projects WHERE user_id = $1 ORDER BY project_id",
+    [userId],
+  );
+  return rows;
 }
 
 export async function createWorkspace(ownerId: string): Promise<string> {
@@ -96,6 +285,8 @@ export interface JobSeed {
   executionError?: string | null;
   outputFiles?: unknown;
   aiDecision?: string | null;
+  projectId?: string | null; // default: TEST_PROJECT_ID
+  archetypeId?: string | null;
 }
 
 export async function createJob(seed: JobSeed): Promise<string> {
@@ -103,8 +294,9 @@ export async function createJob(seed: JobSeed): Promise<string> {
   const status = seed.status ?? "executing";
   await query(
     `INSERT INTO job_requests (job_id, workspace_id, user_id, commit_sha, status, completed_at, release_status,
-                               error_message, execution_output, execution_error, output_files, ai_decision)
-     VALUES ($1, $2, $3, 'abc1234', $4, $5, $6, $7, $8, $9, $10, $11)`,
+                               error_message, execution_output, execution_error, output_files, ai_decision,
+                               project_id, archetype_id)
+     VALUES ($1, $2, $3, 'abc1234', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
     [
       jobId,
       seed.workspaceId,
@@ -117,6 +309,8 @@ export async function createJob(seed: JobSeed): Promise<string> {
       seed.executionError ?? null,
       seed.outputFiles === undefined ? null : JSON.stringify(seed.outputFiles),
       seed.aiDecision ?? null,
+      seed.projectId === undefined ? TEST_PROJECT_ID : seed.projectId,
+      seed.archetypeId === undefined ? "archetype-test" : seed.archetypeId,
     ],
   );
   return jobId;
@@ -125,18 +319,21 @@ export async function createJob(seed: JobSeed): Promise<string> {
 /**
  * Finishes a job the way the coordinator's complete_job_with_held_output does:
  * the real-data text is held in job_outputs and the job waits for a reviewer.
+ * A result is attested with its own hash unless attestedOutputHash says otherwise; error text is not attested.
  */
 export async function completeWithHeldOutput(
   jobId: string,
-  held: { kind: "result" | "error"; content: string; attestedOutputHash?: string },
+  held: { kind: "result" | "error"; content: string; attestedOutputHash?: string | null },
 ): Promise<string> {
   const contentSha256 = sha256(held.content);
+  const attestedOutputHash =
+    held.attestedOutputHash !== undefined ? held.attestedOutputHash : held.kind === "result" ? contentSha256 : null;
   await inTransaction(async (client) => {
     await client.query("SELECT 1 FROM job_requests WHERE job_id = $1 FOR UPDATE", [jobId]);
     await client.query(
       `INSERT INTO job_outputs (job_id, kind, content, content_sha256, attested_output_hash)
        VALUES ($1, $2, $3, $4, $5)`,
-      [jobId, held.kind, held.content, contentSha256, held.attestedOutputHash ?? null],
+      [jobId, held.kind, held.content, contentSha256, attestedOutputHash],
     );
     await client.query(
       `UPDATE job_requests

@@ -11,7 +11,8 @@ export type ResearcherJob<T extends JobRequest = JobRequest> = T & { release: Jo
 
 /**
  * Researcher-facing copy of a job row: output (and its hash), error text and output files
- * from a real-data run are only shown once a reviewer has released them.
+ * from a real-data run are only shown once a reviewer has released them. So are the attestation
+ * and the verification receipt, which both carry the output hash.
  */
 export function toResearcherJob<T extends JobRequest>(
   job: T,
@@ -43,6 +44,8 @@ export function toResearcherJob<T extends JobRequest>(
     outputFiles: visible ? job.outputFiles : null,
     errorMessage,
     outputSha256: visible ? job.outputSha256 : null,
+    attestation: visible ? job.attestation : null,
+    verificationReceipt: visible ? job.verificationReceipt : null,
     release: {
       status: job.releaseStatus,
       decision: decision
