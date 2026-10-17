@@ -90,3 +90,11 @@ http://localhost:8080/realms/epsilon/broker/github/endpoint
 
 http://localhost:3005/api/auth/github/callback
 ```
+## Secret scanning
+
+CI runs [gitleaks](https://github.com/gitleaks/gitleaks) on every PR and blocks commits that add secrets. Run the same check locally before each commit:
+
+```bash
+brew install gitleaks            # or download a release binary
+git config core.hooksPath .githooks
+```
