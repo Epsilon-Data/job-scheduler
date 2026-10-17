@@ -2,12 +2,13 @@ import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema } from "@shared/schema";
 import { githubApi } from "../github";
-import { requireAuth, asyncHandler, NotFoundError, ForbiddenError } from "../middleware";
+import { requireAuth, requireResearcher, asyncHandler, NotFoundError, ForbiddenError } from "../middleware";
+import { toResearcherJob, toResearcherJobs } from "../release";
 
 const router = Router();
 
-// Apply auth middleware to all routes
-router.use(requireAuth);
+// Apply auth middleware to all routes (researcher accounts only)
+router.use(requireAuth, requireResearcher);
 
 /**
  * Get all workspaces for current user with job counts
@@ -73,7 +74,7 @@ router.get("/:id/jobs", asyncHandler(async (req, res) => {
     }
 
     const jobRequests = await storage.getJobRequestsByWorkspaceId(req.params.id);
-    res.json(jobRequests);
+    res.json(await toResearcherJobs(jobRequests));
 }));
 
 /**
@@ -114,7 +115,7 @@ router.post("/:id/jobs", asyncHandler(async (req, res) => {
         executionMethod: "job-runner",
     });
 
-    res.json(jobRequest);
+    res.json(toResearcherJob(jobRequest));
 }));
 
 export default router;

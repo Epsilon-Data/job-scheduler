@@ -1,4 +1,4 @@
-import { Switch, Route } from "wouter";
+import { Switch, Route, Redirect } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -13,6 +13,8 @@ import CreateWorkspace from "@/pages/create-workspace";
 import WorkspaceDetail from "@/pages/workspace-detail";
 import CreateJobRequest from "@/pages/create-job-request";
 import JobRequestDetail from "@/pages/job-request-detail";
+import ReviewQueue from "@/pages/review-queue";
+import ReviewDetail from "@/pages/review-detail";
 import NotFound from "@/pages/not-found";
 
 function AppContent() {
@@ -25,6 +27,23 @@ function AppContent() {
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
           <p className="text-muted-foreground">Loading...</p>
         </div>
+      </div>
+    );
+  }
+
+  // Reviewer accounts only review: any page other than sign-in leads to the review queue
+  if (user?.role === "reviewer") {
+    return (
+      <div className="min-h-screen bg-background">
+        <Header />
+        <Switch>
+          <Route path="/auth" component={Auth} />
+          <Route path="/review/:jobId" component={ReviewDetail} />
+          <Route path="/review" component={ReviewQueue} />
+          <Route>
+            <Redirect to="/review" replace />
+          </Route>
+        </Switch>
       </div>
     );
   }
@@ -44,6 +63,8 @@ function AppContent() {
         <Route path="/jobs/:id" component={JobRequestDetail} />
         <Route path="/jobs" component={UserDashboard} />
         <Route path="/staff" component={StaffDashboard} />
+        <Route path="/review/:jobId" component={ReviewDetail} />
+        <Route path="/review" component={ReviewQueue} />
         <Route path="/requests" component={UserDashboard} />
         <Route component={NotFound} />
       </Switch>

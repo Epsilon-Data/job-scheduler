@@ -6,6 +6,7 @@ import staffRoutes from "./staff";
 import workspaceRoutes from "./workspaces";
 import jobRoutes from "./jobs";
 import githubRoutes from "./github";
+import reviewRoutes from "./review";
 
 /**
  * Register all API routes
@@ -24,6 +25,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     // Staff admin routes
     app.use("/api/staff", staffRoutes);
+
+    // Output-release review routes (reviewers only)
+    app.use("/api/review", reviewRoutes);
 
     // Workspace routes
     app.use("/api/workspaces", workspaceRoutes);

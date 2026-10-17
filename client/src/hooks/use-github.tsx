@@ -6,12 +6,13 @@ interface GitHubStatus {
   username: string | null;
 }
 
-export function useGitHub() {
+export function useGitHub({ enabled = true }: { enabled?: boolean } = {}) {
   const queryClient = useQueryClient();
 
   const { data: status, isLoading } = useQuery<GitHubStatus>({
     queryKey: ["/api/github/status"],
     staleTime: 30000, // 30 seconds
+    enabled,
   });
 
   const disconnectMutation = useMutation({

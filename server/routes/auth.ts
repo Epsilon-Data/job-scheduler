@@ -1,8 +1,19 @@
 import { Router } from "express";
+import { randomBytes } from "crypto";
 import { storage } from "../storage";
 import { approvalRequestSchema } from "@shared/schema";
 import { asyncHandler } from "../middleware";
 import { registerSession, getExpressSessionId, unregisterSession, unregisterByExpressSession } from "../sessionTracker";
+import {
+    decodeJwtPayload,
+    describeRoleChange,
+    endSession,
+    ensureFreshReviewer,
+    holdsReviewerRole,
+    resolveUser,
+    syncLogin,
+    type TokenClaims,
+} from "../roleSync";
 
 const router = Router();
 
@@ -15,7 +26,7 @@ router.get("/login", asyncHandler(async (req, res) => {
     const keycloakClientId = process.env.KEYCLOAK_CLIENT_ID || "jobscheduler-oauth";
     const keycloakRedirectUri = process.env.KEYCLOAK_REDIRECT_URI || "http://localhost:3005/api/auth/callback";
 
-    const state = Math.random().toString(36).substring(2, 15);
+    const state = randomBytes(16).toString("hex");
     req.session.oauthState = state;
 
     req.session.save((err) => {
@@ -34,12 +45,22 @@ router.get("/login", asyncHandler(async (req, res) => {
  * GET /api/auth/callback
  */
 router.get("/callback", asyncHandler(async (req, res) => {
-    const { code, error } = req.query;
+    const { code, state, error } = req.query;
+
+    // The state from /login is single-use
+    const expectedState = req.session.oauthState;
+    delete req.session.oauthState;
 
     if (error) {
         // Sanitize error parameter to prevent open redirect/XSS attacks
         const safeError = String(error).replace(/[^a-zA-Z0-9_-]/g, '');
         res.redirect("/auth?error=" + encodeURIComponent(safeError));
+        return;
+    }
+
+    if (!expectedState || typeof state !== "string" || state !== expectedState) {
+        console.error("Keycloak callback state does not match the login request");
+        res.redirect("/auth?error=state_mismatch");
         return;
     }
 
@@ -67,15 +88,26 @@ router.get("/callback", asyncHandler(async (req, res) => {
         client_secret: keycloakClientSecret,
     });
 
-    const tokenResponse = await fetch(keycloakTokenUrl, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: urlSearchParams,
-    });
-
-    const tokenData = await tokenResponse.json();
+    let tokenData;
+    try {
+        const tokenResponse = await fetch(keycloakTokenUrl, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: urlSearchParams,
+        });
+        if (!tokenResponse.ok) {
+            console.error(`Keycloak token exchange failed: HTTP ${tokenResponse.status}`);
+            res.redirect("/auth?error=token_exchange_failed");
+            return;
+        }
+        tokenData = await tokenResponse.json();
+    } catch (err) {
+        console.error("Keycloak token exchange failed:", (err as Error).message);
+        res.redirect("/auth?error=token_exchange_failed");
+        return;
+    }
 
     if (tokenData.error) {
         console.error("Keycloak token exchange failed:", tokenData.error);
@@ -91,61 +123,70 @@ router.get("/callback", asyncHandler(async (req, res) => {
         return;
     }
 
-    let payload: Record<string, unknown>;
+    let payload: TokenClaims;
     try {
-        const parts = jwt.split(".");
-        if (parts.length !== 3) {
-            throw new Error("Invalid JWT format");
-        }
-        payload = JSON.parse(Buffer.from(parts[1], "base64").toString());
+        payload = decodeJwtPayload(jwt);
     } catch (err) {
         console.error("Failed to decode JWT:", err);
         res.redirect("/auth?error=token_decode_failed");
         return;
     }
 
-    // Log JWT payload for debugging
-    console.log("JWT Payload:", JSON.stringify(payload, null, 2));
-
-    const keycloakUser = {
-        id: String(payload.preferred_username || payload.upn || ""),
-        login: String(payload.preferred_username || payload.upn || ""),
-        email: String(payload.email || ""),
-        name: String(payload.name || `${payload.given_name || ""} ${payload.family_name || ""}`.trim()),
-        avatar_url: String(payload.picture || "")
-    };
-
-    // Check if user exists in database by email
-    let user = await storage.getUserByEmail(keycloakUser.email);
-
-    if (!user) {
-        user = await storage.createUser({
-            externalId: String(payload.sub),
-            username: keycloakUser.login,
-            email: keycloakUser.email,
-            fullName: keycloakUser.name,
-            avatarUrl: keycloakUser.avatar_url,
-            role: "user",
-            approvalStatus: "approved"
-        });
+    const sub = typeof payload.sub === "string" ? payload.sub : "";
+    const email = typeof payload.email === "string" ? payload.email : "";
+    if (!sub || !email || payload.azp !== keycloakClientId) {
+        console.error(`Refused Keycloak token: sub=${sub || "(none)"}, email ${email ? "present" : "missing"}, azp=${String(payload.azp)}`);
+        res.redirect("/auth?error=invalid_token");
+        return;
     }
 
-    // Store tokens in session
-    req.session.userId = user.id;
-    (req.session as any).apiToken = jwt;
-    (req.session as any).idToken = tokenData.id_token || "";
+    // Reviewer accounts are invited: one whose email is not verified cannot sign in
+    if (holdsReviewerRole(payload) && payload.email_verified !== true) {
+        console.warn(`[Auth] Refused login of sub=${sub}: reviewer role with an unverified email`);
+        res.redirect("/auth?error=email_not_verified");
+        return;
+    }
 
-    // Register Keycloak session for backchannel logout
+    const resolution = await resolveUser(payload);
+    if (resolution.kind === "conflict") {
+        console.warn(`[Auth] Refused login of sub=${sub} email=${email}: the email belongs to user ${resolution.userIds.join(", ")}`);
+        res.redirect("/auth?error=account_conflict");
+        return;
+    }
+    if (resolution.kind === "unverified_claim") {
+        console.warn(`[Auth] Refused login of sub=${sub}: claiming legacy user ${resolution.user.id} needs a verified email`);
+        res.redirect("/auth?error=email_not_verified");
+        return;
+    }
+
+    // Role and reviewer projects follow Keycloak, in the same transaction as the user row
+    const synced = await syncLogin(resolution, payload);
+    const user = synced.user;
+    if (resolution.kind === "claim") {
+        console.log(`[Auth] User ${user.id} (legacy external_id ${resolution.user.externalId}) is now bound to sub=${sub}`);
+    }
+    console.log(`[Auth] Login user=${user.id} sub=${sub} ${describeRoleChange(synced)}`);
+
+    // A fresh session id at login, so a session id set before it cannot be reused
+    await new Promise<void>((resolve, reject) => req.session.regenerate((err) => (err ? reject(err) : resolve())));
+    req.session.userId = user.id;
+    req.session.apiToken = jwt;
+    req.session.idToken = tokenData.id_token || "";
+    req.session.refreshToken = tokenData.refresh_token || "";
+    req.session.rolesCheckedAt = Date.now();
+
+    // Register Keycloak session for backchannel logout (under the new session id)
     const sid = payload.sid as string | undefined;
     if (sid) {
       registerSession(sid, req.sessionID);
     }
+    await new Promise<void>((resolve, reject) => req.session.save((err) => (err ? reject(err) : resolve())));
 
     // Redirect based on approval status
     if (user.approvalStatus === "pending") {
         res.redirect("/approval-request");
     } else if (user.approvalStatus === "approved") {
-        res.redirect("/dashboard");
+        res.redirect(user.role === "reviewer" ? "/review" : "/dashboard");
     } else {
         res.redirect("/auth?error=rejected");
     }
@@ -233,10 +274,24 @@ router.get("/me", asyncHandler(async (req, res) => {
         return;
     }
 
-    const user = await storage.getUser(req.session.userId);
+    let user = await storage.getUser(req.session.userId);
     if (!user) {
         res.status(404).json({ message: "User not found" });
         return;
+    }
+
+    // Reviewers are re-checked with Keycloak; if it cannot be reached, the stored row is returned
+    if (user.role === "reviewer") {
+        req.user = user;
+        const check = await ensureFreshReviewer(req, { force: false });
+        if (check.status === "reauth") {
+            await endSession(req);
+            res.status(401).json({ message: "Not authenticated", code: "REAUTH_REQUIRED" });
+            return;
+        }
+        if (check.status === "ok") {
+            user = check.user;
+        }
     }
 
     res.json(user);

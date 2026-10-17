@@ -1,4 +1,5 @@
 // Job-related type definitions
+import type { JobOutput, ReleaseDecision, ReleaseStatus } from "@shared/schema";
 
 export interface AttestationData {
   attestation: {
@@ -137,4 +138,88 @@ export interface JobLog {
   metadata?: Record<string, unknown>;
   logMetadata?: Record<string, unknown>;
   progress?: number;
+}
+
+// Output-release review API (reviewers only)
+export interface ReviewPerson {
+  id: string;
+  username: string;
+  full_name: string | null;
+}
+
+export interface ReviewDecision {
+  id: string;
+  decision: ReleaseDecision["decision"];
+  reason: string | null;
+  output_sha256: string | null;
+  decided_at: string;
+  reviewer: ReviewPerson | null;
+}
+
+// Held output compared with the output hash the enclave signed
+export type AttestationStatus = "matches" | "mismatch" | "not_attested";
+
+interface ReviewJobBase {
+  job_id: string;
+  status: string;
+  release_status: ReleaseStatus | null;
+  completed_at: string | null;
+  project_id: string | null;
+  archetype_id: string | null;
+  submitted_by: ReviewPerson;
+  workspace: { id: string; name: string; github_repo: string };
+  decision: ReviewDecision | null;
+}
+
+// GET /api/review/me: the reviewer's projects as last synced from Keycloak
+export interface ReviewerAssignments {
+  projects: string[];
+  synced_at: string | null;
+}
+
+// GET /api/review/jobs (never carries held content)
+export interface ReviewQueueJob extends ReviewJobBase {
+  output_kind: JobOutput["kind"] | null;
+  output_size: number | null;
+  attestation_status: AttestationStatus | null; // null for the reviewer's own unreleased job
+  own_job: boolean;
+  ai_decision: string | null;
+}
+
+// GET /api/review/jobs/:jobId
+export interface ReviewJobDetail extends ReviewJobBase {
+  commit_sha: string;
+  attestation_status: AttestationStatus;
+  approve_blocked_reason: string | null; // null when Approve is allowed
+  output: {
+    kind: JobOutput["kind"];
+    content: string;
+    content_sha256: string;
+    attested_output_hash: string | null;
+    hash_matches_attestation: boolean | null;
+    size_bytes: number;
+  };
+  verification_receipt: Record<string, unknown> | null;
+  ai: {
+    decision: string | null;
+    confidence: number | null;
+    reasoning: string | null;
+  };
+}
+
+// POST /api/review/jobs/:jobId/decision
+export interface ReviewDecisionResult {
+  decision: ReviewDecision;
+  release_status: "released" | "withheld";
+}
+
+// GET /api/staff/review-routing (counts only, no content)
+export interface ReviewRouting {
+  projects: {
+    project_id: string;
+    pending_count: number;
+    oldest_pending_completed_at: string | null;
+    reviewer_count: number;
+  }[];
+  pending_without_project: number;
 }

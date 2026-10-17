@@ -1,13 +1,16 @@
 import { Router } from "express";
 import { githubApi } from "../github";
 import { storage } from "../storage";
-import { requireGitHubToken, asyncHandler } from "../middleware";
+import { requireGitHubToken, requireResearcher, asyncHandler } from "../middleware";
 
 const router = Router();
 
 const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
 const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
 const GITHUB_REDIRECT_URI = process.env.GITHUB_REDIRECT_URI || "http://localhost:3005/api/github/callback";
+
+// GitHub is a researcher feature: reviewer and unapproved accounts get 403
+router.use(requireResearcher);
 
 /**
  * Initiate GitHub OAuth flow

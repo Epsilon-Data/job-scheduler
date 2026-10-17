@@ -92,6 +92,23 @@ export function safeJsonParse<T>(json: string | undefined | null, fallback: T): 
 }
 
 /**
+ * Format a size in bytes for display
+ */
+export function formatBytes(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined) return '-';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * Short form of a project id (a UUID) for tables; the full id goes in a tooltip
+ */
+export function shortProjectId(projectId: string): string {
+  return projectId.slice(0, 8);
+}
+
+/**
  * Format metadata value for display
  */
 export function formatMetadataValue(key: string, value: unknown): string {

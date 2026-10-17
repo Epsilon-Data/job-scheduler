@@ -3,14 +3,14 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Download, ShieldCheck, CheckCircle, X, Loader2, ChevronDown, ChevronRight, Bot, AlertTriangle, Info, GitCommit, Clock, Cpu } from "lucide-react";
+import { Download, ShieldCheck, CheckCircle, X, Loader2, ChevronDown, ChevronRight, Bot, AlertTriangle, Info, GitCommit, Clock, Cpu, Hourglass, Lock, ShieldX } from "lucide-react";
 import { Link } from "wouter";
 import { useState } from "react";
 import { LoadingSpinner } from "@/components/loading-spinner";
-import { getJobStatusColor } from "@/lib/status-utils";
-import type { JobRequest } from "@shared/schema";
+import { getJobStatusColor, getReleaseStatus, getReleaseStatusBadge } from "@/lib/status-utils";
+import { HELD_ERROR_MESSAGE, type JobRelease, type JobRequest } from "@shared/schema";
 import type { JobLog, AIAnalysisResult } from "@/types/job";
-import { API_CONFIG } from "@/lib/constants";
+import { API_CONFIG, RELEASE_PENDING_BANNER, RELEASE_WITHHELD_TITLE } from "@/lib/constants";
 import { safeJsonParse } from "@/lib/job-utils";
 
 interface JobRequestDetailProps {
@@ -18,6 +18,7 @@ interface JobRequestDetailProps {
 }
 
 const POLL_INTERVAL = 10000; // 10 seconds
+const RELEASE_POLL_INTERVAL = 30000; // 30 seconds: a review takes longer than a run
 
 function isFullyComplete(job: JobRequest): boolean {
   const terminalStatuses = ["success", "failed", "rejected", "ai_rejected"];
@@ -35,7 +36,10 @@ export default function JobRequestDetail({ params }: JobRequestDetailProps) {
     enabled: user?.approvalStatus === "approved",
     refetchInterval: (query) => {
       const data = query.state.data;
-      if (!data || isFullyComplete(data)) return false;
+      if (!data) return false;
+      // Held output: keep polling so the reviewer's decision shows without a reload
+      if (getReleaseStatus(data) === 'pending') return RELEASE_POLL_INTERVAL;
+      if (isFullyComplete(data)) return false;
       return POLL_INTERVAL;
     },
   });
@@ -52,6 +56,9 @@ export default function JobRequestDetail({ params }: JobRequestDetailProps) {
         {/* Header */}
         <JobHeader jobRequest={jobRequest} />
 
+        {/* Output Release */}
+        <ReleaseStatusCard jobRequest={jobRequest} />
+
         {/* Commit Info */}
         <CommitInfo jobRequest={jobRequest} />
 
@@ -67,7 +74,9 @@ export default function JobRequestDetail({ params }: JobRequestDetailProps) {
         <ExecutionOutput jobRequest={jobRequest} />
 
         {/* Attestation */}
-        <AttestationSummary jobRequest={jobRequest} />
+        {getReleaseStatus(jobRequest) === 'pending'
+          ? <AttestationHeldNotice />
+          : <AttestationSummary jobRequest={jobRequest} />}
 
         {/* AI Policy Analysis — visually separated */}
         {aiEnabled && <AIAnalysisSection jobRequest={jobRequest} />}
@@ -82,6 +91,9 @@ export default function JobRequestDetail({ params }: JobRequestDetailProps) {
 /* ── Header ───────────────────────────────────────────────────── */
 
 function JobHeader({ jobRequest }: { jobRequest: JobRequest }) {
+  const releaseStatus = getReleaseStatus(jobRequest);
+  const releaseBadge = getReleaseStatusBadge(releaseStatus);
+
   return (
     <div className="mb-6">
       <nav className="flex items-center space-x-2 text-sm text-muted-foreground mb-2">
@@ -101,7 +113,9 @@ function JobHeader({ jobRequest }: { jobRequest: JobRequest }) {
         </div>
         <div className="flex items-center space-x-3">
           <Badge className={getJobStatusColor(jobRequest.status)}>{jobRequest.status}</Badge>
-          {jobRequest.status === "success" && (
+          {releaseBadge && <Badge className={releaseBadge.className}>{releaseBadge.label}</Badge>}
+          {/* The trust center lists released jobs only */}
+          {jobRequest.status === "success" && releaseStatus === "released" && (
             <a
               href={`${API_CONFIG.TRUST_CENTER_URL}/verify/${jobRequest.jobId}`}
               target="_blank"
@@ -115,6 +129,85 @@ function JobHeader({ jobRequest }: { jobRequest: JobRequest }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ── Output Release ──────────────────────────────────────────── */
+
+function ReleaseStatusCard({ jobRequest }: { jobRequest: JobRequest }) {
+  const status = getReleaseStatus(jobRequest);
+  const decision = jobRequest.release?.decision;
+
+  if (status === 'pending') {
+    return (
+      <Card className="mb-6 border-amber-200">
+        <CardContent className="pt-4">
+          <div className="flex items-start gap-3 bg-amber-50 rounded-lg p-4">
+            <Hourglass className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-medium text-amber-800">Awaiting review</p>
+              <p className="text-sm text-amber-700 mt-1">{RELEASE_PENDING_BANNER}</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (status === 'withheld') {
+    return (
+      <Card className="mb-6 border-slate-300">
+        <CardContent className="pt-4">
+          <div className="flex items-start gap-3 bg-slate-50 rounded-lg p-4">
+            <ShieldX className="h-5 w-5 text-slate-600 shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <p className="font-medium text-slate-800">{RELEASE_WITHHELD_TITLE}</p>
+              {decision?.reason && (
+                <p className="text-sm text-slate-700 mt-1 whitespace-pre-wrap">Reason: {decision.reason}</p>
+              )}
+              {decision && <DecisionRecord decision={decision} />}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // Jobs released by the pre-gate backfill have no decision and get no notice
+  if (status === 'released' && decision) {
+    return (
+      <Card className="mb-6 border-green-200">
+        <CardContent className="pt-4">
+          <div className="flex items-start gap-3 bg-green-50 rounded-lg p-4">
+            <ShieldCheck className="h-5 w-5 text-green-600 shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <p className="font-medium text-green-800">Released after review</p>
+              {decision.reason && (
+                <p className="text-sm text-green-700 mt-1 whitespace-pre-wrap">Note: {decision.reason}</p>
+              )}
+              <DecisionRecord decision={decision} showOutputHash />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return null;
+}
+
+function DecisionRecord({ decision, showOutputHash }: {
+  decision: NonNullable<JobRelease['decision']>;
+  showOutputHash?: boolean;
+}) {
+  return (
+    <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+      <p>Decided {new Date(decision.decided_at).toLocaleString()}</p>
+      <p>Decision ID <span className="font-mono break-all">{decision.id}</span></p>
+      {showOutputHash && (
+        <p>Output SHA-256 <span className="font-mono break-all">{decision.output_sha256}</span></p>
+      )}
     </div>
   );
 }
@@ -221,6 +314,22 @@ function ErrorCard({ jobRequest }: { jobRequest: JobRequest }) {
   const errorMsg = jobRequest.errorMessage || jobRequest.executionError;
   if (!errorMsg) return null;
 
+  if (errorMsg === HELD_ERROR_MESSAGE) {
+    return (
+      <Card className="mb-6">
+        <CardContent className="pt-4">
+          <div className="flex items-start gap-3 bg-muted rounded-lg p-4">
+            <Lock className="h-5 w-5 text-muted-foreground shrink-0 mt-0.5" />
+            <div>
+              <p className="font-medium text-foreground">Held for review</p>
+              <p className="text-sm text-muted-foreground mt-1">{errorMsg}</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <Card className="mb-6 border-red-200">
       <CardContent className="pt-4">
@@ -317,6 +426,25 @@ function ExecutionOutput({ jobRequest }: { jobRequest: JobRequest }) {
 
 /* ── Attestation Summary ─────────────────────────────────────── */
 
+// Before release: the attestation carries the output hash, so it is held with the output
+function AttestationHeldNotice() {
+  return (
+    <Card className="mb-6">
+      <CardContent className="pt-4">
+        <div className="flex items-start gap-3 bg-muted rounded-lg p-4">
+          <Lock className="h-5 w-5 text-muted-foreground shrink-0 mt-0.5" />
+          <div>
+            <p className="font-medium text-foreground">Attestation available after release</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              It includes the hash of the output, so it is held with the output.
+            </p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function AttestationSummary({ jobRequest }: { jobRequest: JobRequest }) {
   const attestationRaw = (jobRequest as any).attestation;
   if (!attestationRaw) return null;
@@ -365,6 +493,8 @@ function AttestationSummary({ jobRequest }: { jobRequest: JobRequest }) {
     typeof (jobRequest as any).execution_metrics === 'string'
       ? (jobRequest as any).execution_metrics : null, null
   );
+  // The ai_decision column comes first; execution_metrics.ai_decision is the older copy
+  const aiDecision: string | null = jobRequest.ai_decision ?? jobRequest.aiDecision ?? metrics?.ai_decision ?? null;
 
   return (
     <Card className="mb-6">
@@ -532,40 +662,40 @@ function AttestationSummary({ jobRequest }: { jobRequest: JobRequest }) {
         )}
 
         {/* Execution Metrics */}
-        {metrics && (
+        {(metrics || aiDecision) && (
           <>
             <div className="border-t pt-3">
               <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Execution Metrics</span>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-sm">
-              {metrics.fetch_middleware_ms != null && (
+              {metrics?.fetch_middleware_ms != null && (
                 <div>
                   <span className="text-muted-foreground text-xs">Data Fetch</span>
                   <p className="font-mono text-xs">{(metrics.fetch_middleware_ms / 1000).toFixed(2)}s</p>
                 </div>
               )}
-              {metrics.zip_and_encrypt_ms != null && (
+              {metrics?.zip_and_encrypt_ms != null && (
                 <div>
                   <span className="text-muted-foreground text-xs">Encrypt</span>
                   <p className="font-mono text-xs">{metrics.zip_and_encrypt_ms.toFixed(0)}ms</p>
                 </div>
               )}
-              {metrics.enclave_round_trip_ms != null && (
+              {metrics?.enclave_round_trip_ms != null && (
                 <div>
                   <span className="text-muted-foreground text-xs">Enclave Execution</span>
                   <p className="font-mono text-xs">{metrics.enclave_round_trip_ms.toFixed(0)}ms</p>
                 </div>
               )}
-              {metrics.total_ms != null && (
+              {metrics?.total_ms != null && (
                 <div>
                   <span className="text-muted-foreground text-xs">Total</span>
                   <p className="font-mono text-xs">{(metrics.total_ms / 1000).toFixed(2)}s</p>
                 </div>
               )}
-              {metrics.ai_decision && (
+              {aiDecision && (
                 <div>
                   <span className="text-muted-foreground text-xs">AI Decision</span>
-                  <Badge variant="outline" className="text-xs">{metrics.ai_decision.replace(/_/g, ' ')}</Badge>
+                  <Badge variant="outline" className="text-xs">{aiDecision.replace(/_/g, ' ')}</Badge>
                 </div>
               )}
             </div>

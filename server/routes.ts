@@ -9,6 +9,7 @@
  * - routes/workspaces.ts - Workspace CRUD routes
  * - routes/jobs.ts      - Job request routes
  * - routes/github.ts    - GitHub API proxy routes
+ * - routes/review.ts    - Output-release review routes
  *
  * Middleware is in the ./middleware/ directory:
  * - middleware/auth.ts       - Authentication middleware

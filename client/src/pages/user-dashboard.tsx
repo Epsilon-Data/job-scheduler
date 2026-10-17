@@ -7,7 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Folder, Play, Clock, Plus, Github, GitBranch, Calendar, ChevronLeft, ChevronRight } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { LoadingSpinner } from "@/components/loading-spinner";
-import { getJobStatusColor, getJobStatusDotColor } from "@/lib/status-utils";
+import { ReleaseStatusBadge } from "@/components/release-status-badge";
+import { getJobStatusColor, getJobStatusDotColor, getReleaseStatus } from "@/lib/status-utils";
 import { formatDate } from "@/lib/date-utils";
 import type { Workspace, JobRequest, PaginatedJobsResponse } from "@shared/schema";
 
@@ -283,6 +284,7 @@ export default function UserDashboard() {
                         <Badge className={getJobStatusColor(job.status)}>
                           {job.status}
                         </Badge>
+                        <ReleaseStatusBadge status={getReleaseStatus(job)} />
                         <Link href={`/jobs/${job.jobId}`}>
                           <Button variant="outline" size="sm">View</Button>
                         </Link>

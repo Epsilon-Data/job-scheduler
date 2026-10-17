@@ -1,6 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { AlertTriangle } from "lucide-react";
-import type { JobRequest } from "@shared/schema";
+import { AlertTriangle, Lock } from "lucide-react";
+import { HELD_ERROR_MESSAGE, type JobRequest } from "@shared/schema";
 
 interface ErrorDetailsCardProps {
   jobRequest: JobRequest;
@@ -13,6 +13,23 @@ export function ErrorDetailsCard({ jobRequest }: ErrorDetailsCardProps) {
 
   if (!errorMessage && !executionError) {
     return null;
+  }
+
+  // Held for review, not an error: shown as a neutral notice
+  if (errorMessage === HELD_ERROR_MESSAGE) {
+    return (
+      <Card className="mb-8">
+        <CardHeader className="bg-muted/50">
+          <CardTitle className="text-foreground flex items-center">
+            <Lock className="h-5 w-5 mr-2 text-muted-foreground" />
+            Held for review
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="pt-4">
+          <p className="text-sm text-muted-foreground">{errorMessage}</p>
+        </CardContent>
+      </Card>
+    );
   }
 
   return (

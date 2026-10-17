@@ -61,4 +61,22 @@ router.get("/jobs", asyncHandler(async (req, res) => {
     res.json(allJobs);
 }));
 
+/**
+ * Held jobs waiting for review per project, and how many reviewers each project has (counts only)
+ * GET /api/staff/review-routing
+ */
+router.get("/review-routing", asyncHandler(async (req, res) => {
+    const routing = await storage.getReviewRouting();
+    res.json({
+        projects: routing.projects.map((project) => ({
+            project_id: project.projectId,
+            pending_count: project.pendingCount,
+            oldest_pending_completed_at: project.oldestPendingCompletedAt,
+            reviewer_count: project.reviewerCount,
+        })),
+        // Held jobs no reviewer can be routed to (they stay pending until a project is set)
+        pending_without_project: routing.pendingWithoutProject,
+    });
+}));
+
 export default router;
