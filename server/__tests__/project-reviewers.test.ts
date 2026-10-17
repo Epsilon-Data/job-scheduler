@@ -2,22 +2,21 @@ import { afterAll, beforeAll, describe, expect, inject, it, vi } from "vitest";
 import request from "supertest";
 import { randomUUID } from "crypto";
 import type { Server } from "http";
+import * as h from "./helpers";
+import { db } from "../db";
+import { storage } from "../storage";
 
-type Helpers = typeof import("./helpers");
 type Researcher = { userId: string; workspaceId: string };
 type Listed = Record<string, any>;
 
 const databaseUrl = inject("databaseUrl");
 
 describe.skipIf(!databaseUrl)("project reviewers: routing and attestation (database tests, need TEST_DATABASE_URL)", () => {
-  let h: Helpers;
   let server: Server;
   let reviewer: string;
   let staff: string;
 
   beforeAll(async () => {
-    // Imported here so server/db.ts only ever sees the throwaway database set up by globalSetup
-    h = await import("./helpers");
     await h.assertThrowawayDatabase();
     server = await h.listen(await h.createTestApp());
     reviewer = await h.createUser("reviewer");
@@ -26,7 +25,7 @@ describe.skipIf(!databaseUrl)("project reviewers: routing and attestation (datab
 
   afterAll(async () => {
     await new Promise((resolve) => (server ? server.close(resolve) : resolve(undefined)));
-    await h?.closeDatabase();
+    await h.closeDatabase();
   });
 
   const marker = (label: string) => `MARKER-${label}-${randomUUID()}`;
@@ -192,7 +191,6 @@ describe.skipIf(!databaseUrl)("project reviewers: routing and attestation (datab
   });
 
   it("the database refuses what the app would not do: no project (RG006), another project (RG007), a stale mirror (RG008)", async () => {
-    const { storage } = await import("../storage");
     const researcher = await newResearcher();
     const insertDecision = (jobId: string, sha: string, reviewerId: string) =>
       h.query(
@@ -225,7 +223,6 @@ describe.skipIf(!databaseUrl)("project reviewers: routing and attestation (datab
   });
 
   it("decision trigger SQLSTATEs map to the API's refusals", async () => {
-    const { db } = await import("../db");
     const researcher = await newResearcher();
     const cases: [string, number, string][] = [
       ["RG006", 409, "NO_PROJECT"],

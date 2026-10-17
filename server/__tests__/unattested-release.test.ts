@@ -1,24 +1,20 @@
-import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, inject, it, vi } from "vitest";
 import request from "supertest";
 import { randomUUID } from "crypto";
 import type { Server } from "http";
+import * as h from "./helpers";
 
-type Helpers = typeof import("./helpers");
 
 const databaseUrl = inject("databaseUrl");
 
 describe.skipIf(!databaseUrl)("a dev database that allows unattested release (database tests, need TEST_DATABASE_URL)", () => {
-  let h: Helpers;
   let server: Server;
   let reviewer: string;
 
   beforeAll(async () => {
-    // Only this file's connections carry the setting (a startup option), as ALTER DATABASE ... SET would in dev;
-    // the other test files share the database and must keep RG009
-    const url = new URL(databaseUrl!);
-    url.searchParams.set("options", "-c epsilon.allow_unattested_release=on");
-    process.env.DATABASE_URL = url.toString();
-    h = await import("./helpers");
+    // Only this file's connections carry the setting (a startup option, read by pg when it opens a connection),
+    // as ALTER DATABASE ... SET would in dev; the other test files share the database and must keep RG009
+    vi.stubEnv("PGOPTIONS", "-c epsilon.allow_unattested_release=on");
     await h.assertThrowawayDatabase();
     server = await h.listen(await h.createTestApp());
     reviewer = await h.createUser("reviewer");
@@ -26,7 +22,8 @@ describe.skipIf(!databaseUrl)("a dev database that allows unattested release (da
 
   afterAll(async () => {
     await new Promise((resolve) => (server ? server.close(resolve) : resolve(undefined)));
-    await h?.closeDatabase();
+    await h.closeDatabase();
+    vi.unstubAllEnvs();
   });
 
   it("does not block Approve on a missing or different attested hash, and the trigger agrees", async () => {

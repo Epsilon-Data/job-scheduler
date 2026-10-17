@@ -3,23 +3,22 @@ import request from "supertest";
 import { randomUUID } from "crypto";
 import type { Server } from "http";
 import { HELD_ERROR_MESSAGE } from "@shared/schema";
+import * as h from "./helpers";
+import { githubApi } from "../github";
+import { storage, ReleaseDecisionError } from "../storage";
 
-type Helpers = typeof import("./helpers");
 type Researcher = { userId: string; workspaceId: string };
 type Listed = Record<string, any>;
 
 const databaseUrl = inject("databaseUrl");
 
 describe.skipIf(!databaseUrl)("output-release gate API (database tests, need TEST_DATABASE_URL)", () => {
-  let h: Helpers;
   let server: Server;
   let reviewer: string;
   let otherReviewer: string;
   let staff: string;
 
   beforeAll(async () => {
-    // Imported here so server/db.ts only ever sees the throwaway database set up by globalSetup
-    h = await import("./helpers");
     await h.assertThrowawayDatabase();
     const app = await h.createTestApp();
     // supertest's own app.listen(0) binds every interface but then requests 127.0.0.1:<port>, which can reach
@@ -34,7 +33,7 @@ describe.skipIf(!databaseUrl)("output-release gate API (database tests, need TES
 
   afterAll(async () => {
     await new Promise((resolve) => (server ? server.close(resolve) : resolve(undefined)));
-    await h?.closeDatabase();
+    await h.closeDatabase();
   });
 
   const marker = (label: string) => `MARKER-${label}-${randomUUID()}`;
@@ -452,7 +451,6 @@ describe.skipIf(!databaseUrl)("output-release gate API (database tests, need TES
   });
 
   it("database guards back up the app checks (a decision by a non-reviewer maps to not_reviewer)", async () => {
-    const { storage, ReleaseDecisionError } = await import("../storage");
     const researcher = await newResearcher();
     const jobId = await h.createJob(researcher);
     const sha = await h.completeWithHeldOutput(jobId, { kind: "result", content: marker("backstop") });
@@ -522,7 +520,6 @@ describe.skipIf(!databaseUrl)("output-release gate API (database tests, need TES
   });
 
   it("authorisation: a failed user lookup in requireReviewer is a 500 and the server keeps serving", async () => {
-    const { storage } = await import("../storage");
     const lookup = vi.spyOn(storage, "getUser").mockRejectedValueOnce(new Error("connection terminated unexpectedly"));
     try {
       expect((await get("/api/review/jobs", reviewer)).status).toBe(500);
@@ -691,7 +688,6 @@ describe.skipIf(!databaseUrl)("output-release gate API (database tests, need TES
   });
 
   it("job creation responses go through the researcher view", async () => {
-    const { githubApi } = await import("../github");
     const commit = vi.spyOn(githubApi, "getLatestCommit").mockResolvedValue({
       sha: "f00dcafe",
       message: "test commit",

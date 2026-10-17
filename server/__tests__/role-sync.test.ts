@@ -2,32 +2,27 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject, i
 import request from "supertest";
 import { randomUUID } from "crypto";
 import type { Server } from "http";
+import * as h from "./helpers";
+import * as tracker from "../sessionTracker";
+import { storage } from "../storage";
 
-type Helpers = typeof import("./helpers");
-type Account = import("./helpers").KeycloakAccount;
+type Account = h.KeycloakAccount;
 type Agent = ReturnType<typeof request.agent>;
 type Listed = Record<string, any>;
 
 const databaseUrl = inject("databaseUrl");
 
 describe.skipIf(!databaseUrl)("Keycloak login and reviewer re-checks (database tests, need TEST_DATABASE_URL)", () => {
-  let h: Helpers;
-  let tracker: typeof import("../sessionTracker");
-  let storage: typeof import("../storage")["storage"];
   let server: Server;
 
   beforeAll(async () => {
-    // Imported here so server/db.ts only ever sees the throwaway database set up by globalSetup
-    h = await import("./helpers");
-    tracker = await import("../sessionTracker");
-    ({ storage } = await import("../storage"));
     await h.assertThrowawayDatabase();
     server = await h.listen(await h.createSessionApp());
   });
 
   afterAll(async () => {
     await new Promise((resolve) => (server ? server.close(resolve) : resolve(undefined)));
-    await h?.closeDatabase();
+    await h.closeDatabase();
   });
 
   beforeEach(() => {
