@@ -1,4 +1,38 @@
 
+-- Name: job_output_files_guard(); Type: FUNCTION; Schema: public; Owner: -
+
+CREATE FUNCTION public.job_output_files_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    IF TG_OP = 'DELETE' AND pg_trigger_depth() > 1 THEN
+        RETURN OLD;
+    END IF;
+    IF (TG_OP <> 'INSERT' AND EXISTS (SELECT 1 FROM release_decisions d WHERE d.job_id = OLD.job_id))
+       OR (TG_OP <> 'DELETE' AND EXISTS (SELECT 1 FROM release_decisions d WHERE d.job_id = NEW.job_id)) THEN
+        RAISE EXCEPTION 'held output files of job % are fixed after a release decision',
+              coalesce(NEW.job_id, OLD.job_id) USING ERRCODE = 'RG010';
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
+END $$;
+
+-- Name: job_outputs_files_manifest_guard(); Type: FUNCTION; Schema: public; Owner: -
+
+CREATE FUNCTION public.job_outputs_files_manifest_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    IF NEW.files_manifest_sha256 IS DISTINCT FROM OLD.files_manifest_sha256
+       AND EXISTS (SELECT 1 FROM release_decisions d WHERE d.job_id = OLD.job_id) THEN
+        RAISE EXCEPTION 'the file manifest of job % is fixed after a release decision', OLD.job_id
+              USING ERRCODE = 'RG010';
+    END IF;
+    RETURN NEW;
+END $$;
+
 -- Name: job_outputs_guard(); Type: FUNCTION; Schema: public; Owner: -
 
 CREATE FUNCTION public.job_outputs_guard() RETURNS trigger
@@ -82,6 +116,7 @@ DECLARE
     v_kind            varchar;
     v_content_sha     varchar;
     v_attested        varchar;
+    v_files_manifest  varchar;
 BEGIN
     SELECT jr.user_id, w.user_id, jr.release_status, jr.project_id
       INTO v_job_user, v_ws_user, v_release_status, v_project
@@ -125,9 +160,11 @@ BEGIN
               USING ERRCODE = 'RG008';
     END IF;
 
-    SELECT kind, content_sha256, attested_output_hash INTO v_kind, v_content_sha, v_attested
+    SELECT kind, content_sha256, attested_output_hash, files_manifest_sha256
+      INTO v_kind, v_content_sha, v_attested, v_files_manifest
       FROM job_outputs WHERE job_id = NEW.job_id FOR SHARE;
-    IF v_content_sha IS NULL OR v_content_sha <> NEW.output_sha256 THEN
+    IF v_content_sha IS NULL OR v_content_sha <> NEW.output_sha256
+       OR NEW.files_manifest_sha256 IS DISTINCT FROM v_files_manifest THEN
         RAISE EXCEPTION 'release decision: output hash does not match the held output' USING ERRCODE = 'RG004';
     END IF;
 
@@ -172,6 +209,21 @@ CREATE TABLE public.job_logs (
     created_at timestamp without time zone DEFAULT now()
 );
 
+-- Name: job_output_files; Type: TABLE; Schema: public; Owner: -
+
+CREATE TABLE public.job_output_files (
+    job_id character varying(255) NOT NULL,
+    name character varying(100) NOT NULL,
+    size integer NOT NULL,
+    content_type character varying(64) NOT NULL,
+    sha256 character varying(64) NOT NULL,
+    storage_key text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT job_output_files_name_check CHECK (((name)::text ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$'::text)),
+    CONSTRAINT job_output_files_sha256_check CHECK (((sha256)::text ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT job_output_files_size_check CHECK ((size >= 0))
+);
+
 -- Name: job_outputs; Type: TABLE; Schema: public; Owner: -
 
 CREATE TABLE public.job_outputs (
@@ -181,6 +233,8 @@ CREATE TABLE public.job_outputs (
     content_sha256 character varying(64) NOT NULL,
     attested_output_hash character varying(64),
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    files_manifest_sha256 character varying(64),
+    CONSTRAINT job_outputs_files_manifest_sha256_check CHECK (((files_manifest_sha256 IS NULL) OR ((files_manifest_sha256)::text ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT job_outputs_attested_output_hash_check CHECK (((attested_output_hash IS NULL) OR ((attested_output_hash)::text ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT job_outputs_content_sha256_check CHECK (((content_sha256)::text = encode(sha256(convert_to(content, 'UTF8'::name)), 'hex'::text))),
     CONSTRAINT job_outputs_kind_check CHECK (((kind)::text = ANY ((ARRAY['result'::character varying, 'error'::character varying])::text[])))
@@ -246,6 +300,7 @@ CREATE TABLE public.release_decisions (
     reason text,
     decided_at timestamp with time zone DEFAULT now() NOT NULL,
     project_id uuid,
+    files_manifest_sha256 character varying(64),
     CONSTRAINT release_decisions_decision_check CHECK (((decision)::text = ANY ((ARRAY['approve'::character varying, 'reject'::character varying])::text[]))),
     CONSTRAINT release_decisions_output_sha256_check CHECK (((output_sha256)::text ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT release_decisions_reason_required CHECK ((((decision)::text = 'approve'::text) OR ((reason IS NOT NULL) AND (length(btrim(reason)) > 0))))
@@ -303,6 +358,11 @@ CREATE TABLE public.workspaces (
 
 ALTER TABLE ONLY public.job_logs
     ADD CONSTRAINT job_logs_pkey PRIMARY KEY (id);
+
+-- Name: job_output_files job_output_files_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+
+ALTER TABLE ONLY public.job_output_files
+    ADD CONSTRAINT job_output_files_pkey PRIMARY KEY (job_id, name);
 
 -- Name: job_outputs job_outputs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 
@@ -365,6 +425,14 @@ CREATE INDEX ix_job_requests_release_status ON public.job_requests USING btree (
 
 CREATE INDEX ix_reviewer_projects_project ON public.reviewer_projects USING btree (project_id);
 
+-- Name: job_output_files job_output_files_guard; Type: TRIGGER; Schema: public; Owner: -
+
+CREATE TRIGGER job_output_files_guard BEFORE INSERT OR DELETE OR UPDATE ON public.job_output_files FOR EACH ROW EXECUTE FUNCTION public.job_output_files_guard();
+
+-- Name: job_outputs job_outputs_files_manifest_guard; Type: TRIGGER; Schema: public; Owner: -
+
+CREATE TRIGGER job_outputs_files_manifest_guard BEFORE UPDATE OF files_manifest_sha256 ON public.job_outputs FOR EACH ROW EXECUTE FUNCTION public.job_outputs_files_manifest_guard();
+
 -- Name: job_outputs job_outputs_guard; Type: TRIGGER; Schema: public; Owner: -
 
 CREATE TRIGGER job_outputs_guard BEFORE DELETE OR UPDATE ON public.job_outputs FOR EACH ROW EXECUTE FUNCTION public.job_outputs_guard();
@@ -389,6 +457,11 @@ CREATE TRIGGER release_decisions_immutable BEFORE DELETE OR UPDATE ON public.rel
 
 ALTER TABLE ONLY public.job_logs
     ADD CONSTRAINT job_logs_job_id_job_requests_job_id_fk FOREIGN KEY (job_id) REFERENCES public.job_requests(job_id) ON DELETE CASCADE;
+
+-- Name: job_output_files job_output_files_job_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+
+ALTER TABLE ONLY public.job_output_files
+    ADD CONSTRAINT job_output_files_job_id_fkey FOREIGN KEY (job_id) REFERENCES public.job_outputs(job_id) ON DELETE CASCADE;
 
 -- Name: job_outputs job_outputs_job_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 
