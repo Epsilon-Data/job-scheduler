@@ -2,6 +2,7 @@ import { pgTable, text, serial, timestamp, uuid, varchar, integer, jsonb, boolea
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+import type { OutputFileSummary } from "./outputFiles";
 
 // Job status enum with AI agent workflow
 export enum JobStatus {
@@ -335,6 +336,9 @@ export type JobRequest = typeof jobRequests.$inferSelect & {
   release_status?: ReleaseStatus | null;
   ai_decision?: string | null;
   release?: JobRelease;
+  // Output files: present only once released
+  files?: OutputFileSummary[];
+  files_manifest_sha256?: string | null;
   // Normalized camelCase fields (added by frontend normalizer)
   detailedLogs?: JobLogEntry[];
   codeViolations?: Array<{

@@ -20,6 +20,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Bot, CheckCircle, Info, ShieldCheck, ShieldX, X } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { LoadingSpinner } from "@/components/loading-spinner";
+import { OutputFilesCard } from "@/components/output-files";
 import { ReleaseDecisionBadge, ReleaseStatusBadge } from "@/components/release-status-badge";
 import { getJobStatusColor } from "@/lib/status-utils";
 import { formatDateTime } from "@/lib/date-utils";
@@ -71,7 +72,12 @@ export default function ReviewDetail({ params }: ReviewDetailProps) {
   };
 
   const decisionMutation = useMutation({
-    mutationFn: async (body: { decision: Decision; reason: string | null; output_sha256: string }) => {
+    mutationFn: async (body: {
+      decision: Decision;
+      reason: string | null;
+      output_sha256: string;
+      files_manifest_sha256: string | null;
+    }) => {
       const response = await apiRequest("POST", `/api/review/jobs/${params.jobId}/decision`, body);
       return (await response.json()) as ReviewDecisionResult;
     },
@@ -116,8 +122,9 @@ export default function ReviewDetail({ params }: ReviewDetailProps) {
     decisionMutation.mutate({
       decision,
       reason: reason.trim() || null,
-      // Binds the decision to the exact content shown on this page
+      // Binds the decision to the exact content and files shown on this page
       output_sha256: job.output.content_sha256,
+      files_manifest_sha256: job.files_manifest_sha256,
     });
   };
 
@@ -145,6 +152,8 @@ export default function ReviewDetail({ params }: ReviewDetailProps) {
   }
 
   const isReject = decision === "reject";
+  const hasFiles = job.files.length > 0;
+  const released = job.release_status === "released";
   const canDecide = job.release_status === "pending" && !job.decision;
 
   return (
@@ -217,8 +226,21 @@ export default function ReviewDetail({ params }: ReviewDetailProps) {
         <OutputCard
           output={job.output}
           attestationStatus={job.attestation_status}
-          released={job.release_status === "released"}
+          released={released}
         />
+
+        {/* Output Files */}
+        {(hasFiles || job.files_manifest_sha256) && (
+          <OutputFilesCard
+            files={job.files}
+            manifestSha256={job.files_manifest_sha256}
+            manifestMatches={job.files_manifest_matches}
+            filesUrl={`/api/review/jobs/${encodeURIComponent(job.job_id)}/files`}
+            title={`${released ? "Released" : "Held"} Files`}
+            description="Released or withheld together with the output above."
+            preview
+          />
+        )}
 
         {/* AI Advisory */}
         <AIAdvisoryCard ai={job.ai} />
@@ -232,8 +254,8 @@ export default function ReviewDetail({ params }: ReviewDetailProps) {
             <CardHeader className="pb-2">
               <CardTitle className="text-base">Release Decision</CardTitle>
               <CardDescription>
-                Approving releases the output above, exactly as shown, to the researcher. Rejecting keeps it
-                withheld and shows the researcher your reason.
+                Approving releases the output above{hasFiles ? " and all of its files" : ""}, exactly as shown, to
+                the researcher. Rejecting keeps {hasFiles ? "them" : "it"} withheld and shows the researcher your reason.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -271,7 +293,7 @@ export default function ReviewDetail({ params }: ReviewDetailProps) {
               <AlertDialogDescription>
                 {isReject
                   ? "The output stays withheld and the researcher sees your reason."
-                  : "The researcher will see the output exactly as shown on this page."}{" "}
+                  : `The researcher will see the output${hasFiles ? ` and its ${job.files.length} ${job.files.length === 1 ? "file" : "files"}` : ""} exactly as shown on this page.`}{" "}
                 The decision is recorded and can't be changed.
               </AlertDialogDescription>
             </AlertDialogHeader>
@@ -475,6 +497,9 @@ function DecisionRecordCard({ decision }: { decision: ReviewDecision }) {
           <p>Decided {formatDateTime(decision.decided_at)}</p>
           <p>Decision ID <span className="font-mono break-all">{decision.id}</span></p>
           <p>Output SHA-256 <span className="font-mono break-all">{decision.output_sha256}</span></p>
+          {decision.files_manifest_sha256 && (
+            <p>Files manifest SHA-256 <span className="font-mono break-all">{decision.files_manifest_sha256}</span></p>
+          )}
         </div>
       </CardContent>
     </Card>

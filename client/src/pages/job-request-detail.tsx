@@ -7,6 +7,7 @@ import { Download, ShieldCheck, CheckCircle, X, Loader2, ChevronDown, ChevronRig
 import { Link } from "wouter";
 import { useState } from "react";
 import { LoadingSpinner } from "@/components/loading-spinner";
+import { OutputFilesCard } from "@/components/output-files";
 import { getJobStatusColor, getReleaseStatus, getReleaseStatusBadge } from "@/lib/status-utils";
 import { HELD_ERROR_MESSAGE, type JobRelease, type JobRequest } from "@shared/schema";
 import type { JobLog, AIAnalysisResult } from "@/types/job";
@@ -73,6 +74,16 @@ export default function JobRequestDetail({ params }: JobRequestDetailProps) {
 
         {/* Execution Output */}
         <ExecutionOutput jobRequest={jobRequest} />
+
+        {/* Output Files (listed by the API only once released) */}
+        {jobRequest.files && jobRequest.files.length > 0 && (
+          <OutputFilesCard
+            files={jobRequest.files}
+            manifestSha256={jobRequest.files_manifest_sha256 ?? null}
+            filesUrl={`/api/jobs/${encodeURIComponent(jobRequest.jobId)}/files`}
+            title="Output Files"
+          />
+        )}
 
         {/* Attestation */}
         {getReleaseStatus(jobRequest) === 'pending'

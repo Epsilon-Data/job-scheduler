@@ -28,6 +28,9 @@ export interface ManifestEntry {
   type: string;
 }
 
+// A held or released file as the API lists it: its manifest entry
+export type OutputFileSummary = ManifestEntry;
+
 // Python's json.dumps escapes everything outside ASCII (ensure_ascii=True) as lowercase \uXXXX
 const asciiJson = (value: unknown) =>
   JSON.stringify(value).replace(/[\u0080-￿]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
