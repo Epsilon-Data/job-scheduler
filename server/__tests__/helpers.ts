@@ -9,6 +9,7 @@ import { pool } from "../db";
 import { registerRoutes } from "../routes";
 import { errorHandler } from "../middleware";
 import { setRecheckRetryDelayMs } from "../roleSync";
+import { manifestSha256, sha256Hex, type OutputFileStore } from "../outputFiles";
 
 export const TEST_USER_HEADER = "x-test-user";
 
@@ -316,25 +317,57 @@ export async function createJob(seed: JobSeed): Promise<string> {
   return jobId;
 }
 
+export interface HeldFile {
+  name: string;
+  bytes: Buffer;
+  type: string;
+}
+
+export const fileManifestSha256 = (files: HeldFile[]) =>
+  manifestSha256(files.map((file) => ({
+    name: file.name,
+    size: file.bytes.length,
+    sha256: sha256Hex(file.bytes),
+    type: file.type,
+  })));
+
 /**
  * Finishes a job the way the coordinator's complete_job_with_held_output does:
  * the real-data text is held in job_outputs and the job waits for a reviewer.
  * A result is attested with its own hash unless attestedOutputHash says otherwise; error text is not attested.
+ * With files (written to the store first, like the coordinator), the file rows and manifest hash are held too.
  */
 export async function completeWithHeldOutput(
   jobId: string,
-  held: { kind: "result" | "error"; content: string; attestedOutputHash?: string | null },
+  held: {
+    kind: "result" | "error";
+    content: string;
+    attestedOutputHash?: string | null;
+    files?: HeldFile[];
+    store?: OutputFileStore;
+  },
 ): Promise<string> {
   const contentSha256 = sha256(held.content);
   const attestedOutputHash =
     held.attestedOutputHash !== undefined ? held.attestedOutputHash : held.kind === "result" ? contentSha256 : null;
+  const files = held.files?.map((file) => ({ ...file, sha256: sha256Hex(file.bytes) }));
+  for (const file of files ?? []) {
+    await held.store?.put(`jobs/${jobId}/${file.sha256}`, file.bytes, file.type);
+  }
   await inTransaction(async (client) => {
     await client.query("SELECT 1 FROM job_requests WHERE job_id = $1 FOR UPDATE", [jobId]);
     await client.query(
-      `INSERT INTO job_outputs (job_id, kind, content, content_sha256, attested_output_hash)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [jobId, held.kind, held.content, contentSha256, attestedOutputHash],
+      `INSERT INTO job_outputs (job_id, kind, content, content_sha256, attested_output_hash, files_manifest_sha256)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [jobId, held.kind, held.content, contentSha256, attestedOutputHash, held.files ? fileManifestSha256(held.files) : null],
     );
+    for (const file of files ?? []) {
+      await client.query(
+        `INSERT INTO job_output_files (job_id, name, size, content_type, sha256, storage_key)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [jobId, file.name, file.bytes.length, file.type, file.sha256, `jobs/${jobId}/${file.sha256}`],
+      );
+    }
     await client.query(
       `UPDATE job_requests
           SET status = $2, release_status = 'pending',

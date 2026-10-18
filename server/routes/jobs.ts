@@ -3,7 +3,8 @@ import { storage } from "../storage";
 import { type JobLogEntry } from "@shared/schema";
 import { githubApi } from "../github";
 import { requireAuth, requireResearcher, asyncHandler, NotFoundError, ForbiddenError } from "../middleware";
-import { toResearcherJob, toResearcherJobs, stripLogErrorDetails } from "../release";
+import { toResearcherJob, toResearcherJobs, stripLogErrorDetails, loadReleasedFiles } from "../release";
+import { sendOutputFile } from "../outputFiles";
 
 const router = Router();
 
@@ -57,6 +58,8 @@ router.get("/jobs/:jobId", requireAuth, requireResearcher, asyncHandler(async (r
     }
 
     const workspace = await storage.getWorkspace(jobRequest.workspaceId);
+    // Output files and their manifest hash exist for the researcher only once released (not even a count before)
+    const releasedFiles = await loadReleasedFiles(jobRequest);
 
     // Calculate duration for completed jobs
     let calculatedDuration = jobRequest.durationSeconds;
@@ -108,6 +111,10 @@ router.get("/jobs/:jobId", requireAuth, requireResearcher, asyncHandler(async (r
         zkp_enabled: jobRequest.zkpEnabled,
         release_status: jobRequest.releaseStatus,
         release: jobRequest.release,
+        ...(releasedFiles && {
+            files: releasedFiles.files,
+            files_manifest_sha256: releasedFiles.filesManifestSha256,
+        }),
         ai_decision: jobRequest.aiDecision,
         detailed_logs: detailedLogs,
         ai_logs: detailedLogs
@@ -118,6 +125,28 @@ router.get("/jobs/:jobId", requireAuth, requireResearcher, asyncHandler(async (r
             })
             .join("\n") || jobRequest.aiLogs,
     });
+}));
+
+/**
+ * Download one released output file of the researcher's own job (404 until the output is released)
+ * GET /api/jobs/:jobId/files/:name (?inline=1 shows an image inline)
+ */
+router.get("/jobs/:jobId/files/:name", requireAuth, requireResearcher, asyncHandler(async (req, res) => {
+    const job = await storage.getJobRequestByJobId(req.params.jobId);
+    if (!job) {
+        throw new NotFoundError("Job request not found");
+    }
+    if (job.userId !== req.session.userId) {
+        throw new ForbiddenError("Access denied");
+    }
+
+    const file = job.releaseStatus === "released"
+        ? await storage.getJobOutputFile(job.jobId, req.params.name)
+        : undefined;
+    if (!file) {
+        throw new NotFoundError("File not found");
+    }
+    await sendOutputFile(res, file, req.query.inline === "1");
 }));
 
 /**
