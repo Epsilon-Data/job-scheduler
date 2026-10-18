@@ -662,6 +662,7 @@ describe.skipIf(!databaseUrl)("output-release gate API (database tests, need TES
       attestation_status: "matches",
       own_job: false,
       ai_decision: "ai_approved",
+      ai_review_unavailable: false,
       decision: null,
     });
     expect((decided.body as Listed[]).find((item) => item.job_id === decidedJob)).toMatchObject({

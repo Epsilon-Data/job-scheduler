@@ -56,7 +56,16 @@ type PersonSummary = Pick<User, "id" | "username" | "fullName">;
 export interface ReviewJobSummary {
   job: Pick<
     JobRequest,
-    "jobId" | "userId" | "status" | "releaseStatus" | "completedAt" | "aiDecision" | "executionMetrics" | "projectId" | "archetypeId"
+    | "jobId"
+    | "userId"
+    | "status"
+    | "releaseStatus"
+    | "completedAt"
+    | "aiDecision"
+    | "executionMetrics"
+    | "validationDecision"
+    | "projectId"
+    | "archetypeId"
   >;
   submitter: PersonSummary;
   workspace: Pick<Workspace, "id" | "userId" | "name" | "githubRepo">;
@@ -66,8 +75,7 @@ export interface ReviewJobSummary {
 }
 
 export interface ReviewJobDetail extends Omit<ReviewJobSummary, "job" | "output"> {
-  job: ReviewJobSummary["job"] &
-    Pick<JobRequest, "commitSha" | "verificationReceipt" | "validationStatus" | "validationDecision">;
+  job: ReviewJobSummary["job"] & Pick<JobRequest, "commitSha" | "verificationReceipt" | "validationStatus">;
   output: JobOutput | null;
   // Dev databases may let unattested results be released (epsilon.allow_unattested_release, read by the trigger)
   allowUnattestedRelease: boolean;
@@ -619,6 +627,7 @@ export class DatabaseStorage implements IStorage {
           completedAt: jobRequests.completedAt,
           aiDecision: jobRequests.aiDecision,
           executionMetrics: jobRequests.executionMetrics,
+          validationDecision: jobRequests.validationDecision,
           projectId: jobRequests.projectId,
           archetypeId: jobRequests.archetypeId,
         },
@@ -669,12 +678,12 @@ export class DatabaseStorage implements IStorage {
           completedAt: jobRequests.completedAt,
           aiDecision: jobRequests.aiDecision,
           executionMetrics: jobRequests.executionMetrics,
+          validationDecision: jobRequests.validationDecision,
           projectId: jobRequests.projectId,
           archetypeId: jobRequests.archetypeId,
           commitSha: jobRequests.commitSha,
           verificationReceipt: jobRequests.verificationReceipt,
           validationStatus: jobRequests.validationStatus,
-          validationDecision: jobRequests.validationDecision,
         },
         submitter: { id: users.id, username: users.username, fullName: users.fullName },
         workspace: {

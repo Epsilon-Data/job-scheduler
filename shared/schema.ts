@@ -330,6 +330,8 @@ export type JobRequest = typeof jobRequests.$inferSelect & {
   error_message?: string;
   ai_enabled?: boolean;
   zkp_enabled?: boolean;
+  validation_status?: string | null;
+  validation_decision?: string | null;
   release_status?: ReleaseStatus | null;
   ai_decision?: string | null;
   release?: JobRelease;

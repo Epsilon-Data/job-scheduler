@@ -1,6 +1,7 @@
 import { Router, type Response } from "express";
 import { z } from "zod";
 import type { JobOutput, ReleaseDecision, User } from "@shared/schema";
+import { isAiReviewUnavailable } from "@shared/aiReview";
 import {
     storage,
     ReleaseDecisionError,
@@ -104,6 +105,11 @@ function aiDecisionOf(job: ReviewJobSummary["job"]): string | null {
     return job.aiDecision ?? (typeof fromMetrics === "string" ? fromMetrics : null);
 }
 
+// The AI review failed (ai_error, or the analyzer's fallback "rejection"): it gave no verdict
+function aiReviewUnavailable(job: ReviewJobSummary["job"]): boolean {
+    return isAiReviewUnavailable(aiDecisionOf(job), job.validationDecision);
+}
+
 function summarize(row: Omit<ReviewJobSummary, "output">) {
     return {
         job_id: row.job.jobId,
@@ -172,6 +178,7 @@ router.get("/jobs", asyncHandler(async (req, res) => {
             attestation_status: hideOwnOutput ? null : attestationStatusOf(row.output),
             own_job: own,
             ai_decision: aiDecisionOf(row.job),
+            ai_review_unavailable: aiReviewUnavailable(row.job),
             // ... and is not told who decided on their own job
             decision: row.decision ? toDecision(row.decision, own ? null : row.reviewer, !hideOwnOutput) : null,
         };
@@ -189,7 +196,9 @@ router.get("/jobs/:jobId", asyncHandler(async (req, res) => {
     if (!row.output) return refuse(res, "no_output");
 
     const { job, output } = row;
-    const confidence = job.validationStatus ? Number(job.validationStatus) : NaN;
+    const aiUnavailable = aiReviewUnavailable(job);
+    // A failed review's stored confidence is made up, so none is reported
+    const confidence = job.validationStatus && !aiUnavailable ? Number(job.validationStatus) : NaN;
     const files = (await storage.getJobOutputFiles(job.jobId)).map(toFileSummary);
 
     res.json({
@@ -219,6 +228,7 @@ router.get("/jobs/:jobId", asyncHandler(async (req, res) => {
             decision: aiDecisionOf(job),
             confidence: Number.isFinite(confidence) ? confidence : null,
             reasoning: job.validationDecision,
+            unavailable: aiUnavailable,
         },
         decision: row.decision ? toDecision(row.decision, row.reviewer) : null,
     });

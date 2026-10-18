@@ -27,6 +27,7 @@ import { formatBytes } from "@/lib/job-utils";
 import { isReviewAccessLost, parseApiError, reviewErrorMessage } from "@/lib/api-utils";
 import { AI_ADVISORY_LABEL, OWN_JOB_REVIEW_MESSAGE } from "@/lib/constants";
 import type { AttestationStatus, ReviewDecision, ReviewDecisionResult, ReviewJobDetail } from "@/types/job";
+import { AI_REVIEW_UNAVAILABLE } from "@shared/aiReview";
 
 interface ReviewDetailProps {
   params: { jobId: string };
@@ -381,6 +382,14 @@ function AIAdvisoryCard({ ai }: { ai: ReviewJobDetail["ai"] }) {
       <CardContent className="space-y-2 text-sm">
         {!hasReview ? (
           <p className="text-muted-foreground">No AI review was recorded for this job.</p>
+        ) : ai.unavailable ? (
+          <>
+            <Badge variant="outline" className="text-xs text-muted-foreground">{AI_REVIEW_UNAVAILABLE}</Badge>
+            <p className="text-muted-foreground">
+              The AI review did not complete, so it says nothing about this job.
+            </p>
+            {ai.reasoning && <p className="text-xs text-muted-foreground whitespace-pre-wrap">{ai.reasoning}</p>}
+          </>
         ) : (
           <>
             <div className="flex items-center gap-2">

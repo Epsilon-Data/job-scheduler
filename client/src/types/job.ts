@@ -184,6 +184,7 @@ export interface ReviewQueueJob extends ReviewJobBase {
   attestation_status: AttestationStatus | null; // null for the reviewer's own unreleased job
   own_job: boolean;
   ai_decision: string | null;
+  ai_review_unavailable: boolean; // the AI review errored: no verdict
 }
 
 // GET /api/review/jobs/:jobId
@@ -204,6 +205,7 @@ export interface ReviewJobDetail extends ReviewJobBase {
     decision: string | null;
     confidence: number | null;
     reasoning: string | null;
+    unavailable: boolean; // the AI review errored: decision and confidence are not a verdict
   };
 }
 
