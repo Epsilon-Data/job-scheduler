@@ -26,6 +26,12 @@ services:
       - GITHUB_REDIRECT_URI=${GITHUB_REDIRECT_URI}
       # Database
       - DATABASE_URL=${DATABASE_URL}
+      # Output files of real-data runs (read-only here; the coordinator writes them).
+      # Unset store: files are listed but not served
+      - OUTPUT_FILES_STORE=${OUTPUT_FILES_STORE:-}
+      - OUTPUT_FILES_BUCKET=${OUTPUT_FILES_BUCKET:-}
+      - OUTPUT_FILES_DIR=${OUTPUT_FILES_DIR:-/app/data/output-files}
+      - AWS_REGION=${AWS_REGION:-ap-southeast-2}
       # Feature Flags
       - AI_ENABLED=${AI_ENABLED:-true}
       - ZKP_ENABLED=${ZKP_ENABLED:-true}
