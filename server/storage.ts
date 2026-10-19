@@ -4,6 +4,7 @@ import {
   jobRequests,
   jobLogs,
   jobOutputs,
+  jobOutputFiles,
   releaseDecisions,
   reviewerProjects,
   type User,
@@ -13,6 +14,7 @@ import {
   type JobRequest,
   type InsertJobRequest,
   type JobOutput,
+  type JobOutputFile,
   type ReleaseDecision,
   type ReviewerProject,
   type PaginationParams,
@@ -54,7 +56,16 @@ type PersonSummary = Pick<User, "id" | "username" | "fullName">;
 export interface ReviewJobSummary {
   job: Pick<
     JobRequest,
-    "jobId" | "userId" | "status" | "releaseStatus" | "completedAt" | "aiDecision" | "executionMetrics" | "projectId" | "archetypeId"
+    | "jobId"
+    | "userId"
+    | "status"
+    | "releaseStatus"
+    | "completedAt"
+    | "aiDecision"
+    | "executionMetrics"
+    | "validationDecision"
+    | "projectId"
+    | "archetypeId"
   >;
   submitter: PersonSummary;
   workspace: Pick<Workspace, "id" | "userId" | "name" | "githubRepo">;
@@ -64,8 +75,7 @@ export interface ReviewJobSummary {
 }
 
 export interface ReviewJobDetail extends Omit<ReviewJobSummary, "job" | "output"> {
-  job: ReviewJobSummary["job"] &
-    Pick<JobRequest, "commitSha" | "verificationReceipt" | "validationStatus" | "validationDecision">;
+  job: ReviewJobSummary["job"] & Pick<JobRequest, "commitSha" | "verificationReceipt" | "validationStatus">;
   output: JobOutput | null;
   // Dev databases may let unattested results be released (epsilon.allow_unattested_release, read by the trigger)
   allowUnattestedRelease: boolean;
@@ -108,6 +118,7 @@ export interface NewReleaseDecision {
   decision: ReleaseDecision["decision"];
   reason: string | null;
   outputSha256: string;
+  filesManifestSha256?: string | null; // the file manifest the reviewer saw (none: no files)
 }
 
 export type ReleaseDecisionFailure =
@@ -226,6 +237,8 @@ export interface IStorage {
   // Output-release gate methods
   getJobOutputs(jobIds: string[]): Promise<JobOutput[]>;
   getReleaseDecisions(jobIds: string[]): Promise<ReleaseDecision[]>;
+  getJobOutputFiles(jobId: string): Promise<JobOutputFile[]>;
+  getJobOutputFile(jobId: string, name: string): Promise<JobOutputFile | undefined>;
   getReviewJobs(reviewerId: string, filter: ReviewJobFilter): Promise<ReviewJobSummary[]>;
   getReviewJob(reviewerId: string, jobId: string): Promise<ReviewJobDetail | undefined>;
   recordReleaseDecision(input: NewReleaseDecision): Promise<{
@@ -590,6 +603,18 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(releaseDecisions).where(inArray(releaseDecisions.jobId, jobIds));
   }
 
+  async getJobOutputFiles(jobId: string): Promise<JobOutputFile[]> {
+    return db.select().from(jobOutputFiles).where(eq(jobOutputFiles.jobId, jobId)).orderBy(asc(jobOutputFiles.name));
+  }
+
+  async getJobOutputFile(jobId: string, name: string): Promise<JobOutputFile | undefined> {
+    const [file] = await db
+      .select()
+      .from(jobOutputFiles)
+      .where(and(eq(jobOutputFiles.jobId, jobId), eq(jobOutputFiles.name, name)));
+    return file;
+  }
+
   async getReviewJobs(reviewerId: string, filter: ReviewJobFilter): Promise<ReviewJobSummary[]> {
     const reviewers = alias(users, "reviewers");
     const query = db
@@ -602,6 +627,7 @@ export class DatabaseStorage implements IStorage {
           completedAt: jobRequests.completedAt,
           aiDecision: jobRequests.aiDecision,
           executionMetrics: jobRequests.executionMetrics,
+          validationDecision: jobRequests.validationDecision,
           projectId: jobRequests.projectId,
           archetypeId: jobRequests.archetypeId,
         },
@@ -652,12 +678,12 @@ export class DatabaseStorage implements IStorage {
           completedAt: jobRequests.completedAt,
           aiDecision: jobRequests.aiDecision,
           executionMetrics: jobRequests.executionMetrics,
+          validationDecision: jobRequests.validationDecision,
           projectId: jobRequests.projectId,
           archetypeId: jobRequests.archetypeId,
           commitSha: jobRequests.commitSha,
           verificationReceipt: jobRequests.verificationReceipt,
           validationStatus: jobRequests.validationStatus,
-          validationDecision: jobRequests.validationDecision,
         },
         submitter: { id: users.id, username: users.username, fullName: users.fullName },
         workspace: {
@@ -708,12 +734,14 @@ export class DatabaseStorage implements IStorage {
         }
 
         const [output] = await tx
-          .select({ contentSha256: jobOutputs.contentSha256 })
+          .select({ contentSha256: jobOutputs.contentSha256, filesManifestSha256: jobOutputs.filesManifestSha256 })
           .from(jobOutputs)
           .where(eq(jobOutputs.jobId, input.jobId));
         if (!output) throw new ReleaseDecisionError("no_output");
         if (job.releaseStatus !== "pending") throw new ReleaseDecisionError("not_pending");
-        if (output.contentSha256 !== input.outputSha256) throw new ReleaseDecisionError("stale_output");
+        if (output.contentSha256 !== input.outputSha256 || output.filesManifestSha256 !== (input.filesManifestSha256 ?? null)) {
+          throw new ReleaseDecisionError("stale_output");
+        }
 
         const [decision] = await tx.insert(releaseDecisions).values(input).returning();
         const releaseStatus = input.decision === "approve" ? "released" : "withheld";

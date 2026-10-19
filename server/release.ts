@@ -6,6 +6,7 @@ import {
   type ReleaseDecision,
 } from "@shared/schema";
 import { storage } from "./storage";
+import { toFileSummary } from "./outputFiles";
 
 export type ResearcherJob<T extends JobRequest = JobRequest> = T & { release: JobRelease };
 
@@ -60,6 +61,23 @@ export function toResearcherJob<T extends JobRequest>(
         : null,
     },
   };
+}
+
+export interface ReleasedFiles {
+  files: ReturnType<typeof toFileSummary>[];
+  filesManifestSha256: string | null;
+}
+
+/**
+ * The output files of a released job, for its researcher; null for any job not released.
+ */
+export async function loadReleasedFiles(job: Pick<JobRequest, "jobId" | "releaseStatus">): Promise<ReleasedFiles | null> {
+  if (job.releaseStatus !== "released") return null;
+  const [[output], files] = await Promise.all([
+    storage.getJobOutputs([job.jobId]),
+    storage.getJobOutputFiles(job.jobId),
+  ]);
+  return { files: files.map(toFileSummary), filesManifestSha256: output?.filesManifestSha256 ?? null };
 }
 
 export interface ReleaseRecords {

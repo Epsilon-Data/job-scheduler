@@ -7,11 +7,13 @@ import { Download, ShieldCheck, CheckCircle, X, Loader2, ChevronDown, ChevronRig
 import { Link } from "wouter";
 import { useState } from "react";
 import { LoadingSpinner } from "@/components/loading-spinner";
+import { OutputFilesCard } from "@/components/output-files";
 import { getJobStatusColor, getReleaseStatus, getReleaseStatusBadge } from "@/lib/status-utils";
 import { HELD_ERROR_MESSAGE, type JobRelease, type JobRequest } from "@shared/schema";
 import type { JobLog, AIAnalysisResult } from "@/types/job";
 import { API_CONFIG, RELEASE_PENDING_BANNER, RELEASE_WITHHELD_TITLE } from "@/lib/constants";
 import { safeJsonParse } from "@/lib/job-utils";
+import { AI_REVIEW_UNAVAILABLE, isAiReviewUnavailable } from "@shared/aiReview";
 
 interface JobRequestDetailProps {
   params: { id: string };
@@ -72,6 +74,16 @@ export default function JobRequestDetail({ params }: JobRequestDetailProps) {
 
         {/* Execution Output */}
         <ExecutionOutput jobRequest={jobRequest} />
+
+        {/* Output Files (listed by the API only once released) */}
+        {jobRequest.files && jobRequest.files.length > 0 && (
+          <OutputFilesCard
+            files={jobRequest.files}
+            manifestSha256={jobRequest.files_manifest_sha256 ?? null}
+            filesUrl={`/api/jobs/${encodeURIComponent(jobRequest.jobId)}/files`}
+            title="Output Files"
+          />
+        )}
 
         {/* Attestation */}
         {getReleaseStatus(jobRequest) === 'pending'
@@ -495,6 +507,7 @@ function AttestationSummary({ jobRequest }: { jobRequest: JobRequest }) {
   );
   // The ai_decision column comes first; execution_metrics.ai_decision is the older copy
   const aiDecision: string | null = jobRequest.ai_decision ?? jobRequest.aiDecision ?? metrics?.ai_decision ?? null;
+  const aiUnavailable = isAiReviewUnavailable(aiDecision, jobRequest.validationDecision);
 
   return (
     <Card className="mb-6">
@@ -695,7 +708,9 @@ function AttestationSummary({ jobRequest }: { jobRequest: JobRequest }) {
               {aiDecision && (
                 <div>
                   <span className="text-muted-foreground text-xs">AI Decision</span>
-                  <Badge variant="outline" className="text-xs">{aiDecision.replace(/_/g, ' ')}</Badge>
+                  <Badge variant="outline" className="text-xs">
+                    {aiUnavailable ? AI_REVIEW_UNAVAILABLE : aiDecision.replace(/_/g, ' ')}
+                  </Badge>
                 </div>
               )}
             </div>
@@ -745,7 +760,8 @@ function AIAnalysisSection({ jobRequest }: { jobRequest: JobRequest }) {
   const validationDecision = jobRequest.validationDecision || (jobRequest as any).validation_decision;
 
   const confidence = validationStatus ? parseFloat(validationStatus) : null;
-  const isError = validationDecision?.startsWith('AI analysis error');
+  // A failed review is stored as a decision too (with a made-up confidence); it is not a verdict
+  const isError = isAiReviewUnavailable(jobRequest.ai_decision ?? jobRequest.aiDecision, validationDecision);
   const isLoading = !validationStatus && !validationDecision;
 
   // Parse risks from ai_logs (must be before isApproved)
@@ -808,7 +824,7 @@ function AIAnalysisSection({ jobRequest }: { jobRequest: JobRequest }) {
             <div className="flex items-start gap-3">
               <X className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
               <div>
-                <p className="font-medium text-sm text-red-800">AI Analysis Failed</p>
+                <p className="font-medium text-sm text-red-800">{AI_REVIEW_UNAVAILABLE}</p>
                 <p className="text-sm text-muted-foreground mt-1">{validationDecision}</p>
                 <div className="flex items-start gap-1.5 mt-3 text-xs text-muted-foreground bg-muted rounded px-3 py-2">
                   <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />

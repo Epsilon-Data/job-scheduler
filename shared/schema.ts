@@ -2,6 +2,7 @@ import { pgTable, text, serial, timestamp, uuid, varchar, integer, jsonb, boolea
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+import type { OutputFileSummary } from "./outputFiles";
 
 // Job status enum with AI agent workflow
 export enum JobStatus {
@@ -105,7 +106,8 @@ export const jobRequests = pgTable("job_requests", {
 });
 
 // job_outputs and release_decisions are created by coordinator alembic revision 7f3a9c2d1e4b,
-// reviewer_projects by c5e2a8d4b7f1; never run drizzle-kit push against a shared database.
+// reviewer_projects by c5e2a8d4b7f1, job_output_files and the files_manifest_sha256 columns by the
+// output-files revision after it; never run drizzle-kit push against a shared database.
 export const jobOutputs = pgTable("job_outputs", {
   jobId: varchar("job_id", { length: 255 }).primaryKey().references(() => jobRequests.jobId, { onDelete: "cascade" }),
   kind: varchar("kind", { length: 10, enum: ["result", "error"] }).notNull(),
@@ -113,7 +115,20 @@ export const jobOutputs = pgTable("job_outputs", {
   contentSha256: varchar("content_sha256", { length: 64 }).notNull(),
   attestedOutputHash: varchar("attested_output_hash", { length: 64 }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  // SHA-256 of the canonical manifest of the files the run wrote (null: an enclave without output files)
+  filesManifestSha256: varchar("files_manifest_sha256", { length: 64 }),
 });
+
+// Files a real-data run wrote, held with its output; the bytes live in the output file store under storage_key
+export const jobOutputFiles = pgTable("job_output_files", {
+  jobId: varchar("job_id", { length: 255 }).notNull().references(() => jobOutputs.jobId, { onDelete: "cascade" }),
+  name: varchar("name", { length: 100 }).notNull(),
+  size: integer("size").notNull(),
+  contentType: varchar("content_type", { length: 64 }).notNull(),
+  sha256: varchar("sha256", { length: 64 }).notNull(),
+  storageKey: text("storage_key").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [primaryKey({ columns: [table.jobId, table.name] })]);
 
 export const releaseDecisions = pgTable("release_decisions", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -124,6 +139,7 @@ export const releaseDecisions = pgTable("release_decisions", {
   reason: text("reason"),
   decidedAt: timestamp("decided_at", { withTimezone: true }).notNull().defaultNow(),
   projectId: uuid("project_id"), // stamped by the decision trigger
+  filesManifestSha256: varchar("files_manifest_sha256", { length: 64 }), // the file manifest the reviewer saw
 });
 
 // Mirror of the reviewer's Keycloak groups "Reviewers of <project id>", refreshed at login and on every re-check
@@ -245,6 +261,7 @@ export type InsertUser = z.infer<typeof insertUserSchema>;
 export type Workspace = typeof workspaces.$inferSelect;
 export type InsertWorkspace = z.infer<typeof insertWorkspaceSchema>;
 export type JobOutput = typeof jobOutputs.$inferSelect;
+export type JobOutputFile = typeof jobOutputFiles.$inferSelect;
 export type ReleaseDecision = typeof releaseDecisions.$inferSelect;
 export type ReviewerProject = typeof reviewerProjects.$inferSelect;
 
@@ -314,9 +331,14 @@ export type JobRequest = typeof jobRequests.$inferSelect & {
   error_message?: string;
   ai_enabled?: boolean;
   zkp_enabled?: boolean;
+  validation_status?: string | null;
+  validation_decision?: string | null;
   release_status?: ReleaseStatus | null;
   ai_decision?: string | null;
   release?: JobRelease;
+  // Output files: present only once released
+  files?: OutputFileSummary[];
+  files_manifest_sha256?: string | null;
   // Normalized camelCase fields (added by frontend normalizer)
   detailedLogs?: JobLogEntry[];
   codeViolations?: Array<{

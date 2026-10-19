@@ -17,6 +17,7 @@ import { formatBytes, shortProjectId } from "@/lib/job-utils";
 import { isReviewAccessLost, parseApiError, reviewErrorMessage } from "@/lib/api-utils";
 import { NO_PROJECTS_MESSAGE, OWN_JOB_REVIEW_MESSAGE, REVIEWER_NOT_APPROVED_MESSAGE } from "@/lib/constants";
 import type { ReviewerAssignments, ReviewQueueJob } from "@/types/job";
+import { AI_REVIEW_UNAVAILABLE } from "@shared/aiReview";
 
 type QueueTab = "pending" | "decided";
 
@@ -272,6 +273,8 @@ function ReviewJobsCard({ jobs = [], isLoading, error, emptyMessage, showDecisio
                             </div>
                           </>
                         )
+                      ) : job.ai_review_unavailable ? (
+                        <Badge variant="outline" className="text-xs text-muted-foreground">{AI_REVIEW_UNAVAILABLE}</Badge>
                       ) : job.ai_decision ? (
                         <Badge variant="outline" className="text-xs">{job.ai_decision.replace(/_/g, " ")}</Badge>
                       ) : (

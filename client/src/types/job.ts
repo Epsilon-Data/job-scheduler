@@ -1,5 +1,8 @@
 // Job-related type definitions
 import type { JobOutput, ReleaseDecision, ReleaseStatus } from "@shared/schema";
+import type { OutputFileSummary } from "@shared/outputFiles";
+
+export type { OutputFileSummary };
 
 export interface AttestationData {
   attestation: {
@@ -152,6 +155,7 @@ export interface ReviewDecision {
   decision: ReleaseDecision["decision"];
   reason: string | null;
   output_sha256: string | null;
+  files_manifest_sha256: string | null;
   decided_at: string;
   reviewer: ReviewPerson | null;
 }
@@ -184,6 +188,7 @@ export interface ReviewQueueJob extends ReviewJobBase {
   attestation_status: AttestationStatus | null; // null for the reviewer's own unreleased job
   own_job: boolean;
   ai_decision: string | null;
+  ai_review_unavailable: boolean; // the AI review errored: no verdict
 }
 
 // GET /api/review/jobs/:jobId
@@ -199,11 +204,16 @@ export interface ReviewJobDetail extends ReviewJobBase {
     hash_matches_attestation: boolean | null;
     size_bytes: number;
   };
+  // Files the run wrote, decided on together with the output; null manifest: none recorded
+  files: OutputFileSummary[];
+  files_manifest_sha256: string | null;
+  files_manifest_matches: boolean | null;
   verification_receipt: Record<string, unknown> | null;
   ai: {
     decision: string | null;
     confidence: number | null;
     reasoning: string | null;
+    unavailable: boolean; // the AI review errored: decision and confidence are not a verdict
   };
 }
 
