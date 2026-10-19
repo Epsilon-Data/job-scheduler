@@ -4,7 +4,7 @@ import { type JobLogEntry } from "@shared/schema";
 import { githubApi } from "../github";
 import { requireAuth, requireResearcher, asyncHandler, NotFoundError, ForbiddenError } from "../middleware";
 import { toResearcherJob, toResearcherJobs, stripLogErrorDetails, loadReleasedFiles } from "../release";
-import { sendOutputFile } from "../outputFiles";
+import { requestedOutputFileName, sendOutputFile } from "../outputFiles";
 
 const router = Router();
 
@@ -129,9 +129,11 @@ router.get("/jobs/:jobId", requireAuth, requireResearcher, asyncHandler(async (r
 
 /**
  * Download one released output file of the researcher's own job (404 until the output is released)
- * GET /api/jobs/:jobId/files/:name (?inline=1 shows an image inline)
+ * GET /api/jobs/:jobId/files/<name> (the name may hold "/"; ?inline=1 shows an image inline)
  */
-router.get("/jobs/:jobId/files/:name", requireAuth, requireResearcher, asyncHandler(async (req, res) => {
+router.get("/jobs/:jobId/files/*", requireAuth, requireResearcher, asyncHandler(async (req, res) => {
+    const name = requestedOutputFileName(req, res);
+    if (name === null) return;
     const job = await storage.getJobRequestByJobId(req.params.jobId);
     if (!job) {
         throw new NotFoundError("Job request not found");
@@ -141,7 +143,7 @@ router.get("/jobs/:jobId/files/:name", requireAuth, requireResearcher, asyncHand
     }
 
     const file = job.releaseStatus === "released"
-        ? await storage.getJobOutputFile(job.jobId, req.params.name)
+        ? await storage.getJobOutputFile(job.jobId, name)
         : undefined;
     if (!file) {
         throw new NotFoundError("File not found");

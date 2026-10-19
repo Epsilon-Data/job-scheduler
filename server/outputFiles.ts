@@ -1,10 +1,17 @@
 import fs from "fs/promises";
 import path from "path";
 import { createHash } from "crypto";
-import type { Response } from "express";
+import type { Request, Response } from "express";
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import type { JobOutputFile } from "@shared/schema";
-import { canonicalManifestJson, isImageType, outputFileType, type ManifestEntry } from "@shared/outputFiles";
+import {
+  canonicalManifestJson,
+  isImageType,
+  isValidOutputFileName,
+  outputFileBasename,
+  outputFileType,
+  type ManifestEntry,
+} from "@shared/outputFiles";
 
 /**
  * Output files of real-data runs. The coordinator writes the bytes to the store (OUTPUT_FILES_STORE = s3 | local)
@@ -114,6 +121,19 @@ export function toFileSummary(file: JobOutputFile) {
 }
 
 /**
+ * The file name of a download route (its wildcard, so names may hold "/"), or null after answering 400 when it
+ * breaks the name rule: such a name is never looked up in the database or the store
+ */
+export function requestedOutputFileName(req: Request, res: Response): string | null {
+  const name = (req.params as Record<string, string | undefined>)[0] ?? "";
+  if (!isValidOutputFileName(name)) {
+    res.status(400).json({ message: "Invalid file name", code: "INVALID_FILE_NAME" });
+    return null;
+  }
+  return name;
+}
+
+/**
  * Sends one held or released file after checking its bytes against the recorded SHA-256. Only images may be
  * shown inline (for previews); everything else is a download, and nothing is sniffed or run as a page.
  */
@@ -143,8 +163,8 @@ export async function sendOutputFile(res: Response, file: JobOutputFile, inline:
     "X-Content-Type-Options": "nosniff",
     "Content-Security-Policy": "sandbox",
     "Cache-Control": "private, no-store",
-    // Names are restricted to [A-Za-z0-9._-], so they need no quoting beyond this
-    "Content-Disposition": `${inline && isImageType(type) ? "inline" : "attachment"}; filename="${file.name}"`,
+    // Name segments are restricted to [A-Za-z0-9._-], so the basename needs no quoting beyond this
+    "Content-Disposition": `${inline && isImageType(type) ? "inline" : "attachment"}; filename="${outputFileBasename(file.name)}"`,
   });
   res.send(bytes);
 }

@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { CheckCircle, ChevronDown, ChevronRight, Download, FileText, X } from "lucide-react";
 import { formatBytes } from "@/lib/job-utils";
 import { parseCsv } from "@/lib/csv";
-import { isImageType } from "@shared/outputFiles";
+import { outputFileBasename, outputFilePreview, outputFileUrlPath, type OutputFilePreview } from "@shared/outputFiles";
 import type { OutputFileSummary } from "@/types/job";
 
 const CSV_PREVIEW_ROWS = 100;
@@ -89,7 +89,7 @@ export function OutputFilesCard({
               <OutputFileRow
                 key={file.name}
                 file={file}
-                url={`${filesUrl}/${encodeURIComponent(file.name)}`}
+                url={`${filesUrl}/${outputFileUrlPath(file.name)}`}
                 preview={preview}
               />
             ))}
@@ -121,13 +121,14 @@ function OutputFileRow({ file, url, preview }: { file: OutputFileSummary; url: s
   const [open, setOpen] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const canPreview = preview && file.type !== "application/pdf";
+  const previewKind = outputFilePreview(file.type);
+  const canPreview = preview && previewKind !== null;
 
   const download = async () => {
     setDownloading(true);
     setError(null);
     try {
-      saveBlob(await fetchFile(url, file), file.name);
+      saveBlob(await fetchFile(url, file), outputFileBasename(file.name));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -154,7 +155,6 @@ function OutputFileRow({ file, url, preview }: { file: OutputFileSummary; url: s
           </button>
           <p className="text-xs text-muted-foreground mt-0.5">
             {file.type}, {formatBytes(file.size)}
-            {preview && file.type === "application/pdf" && " (download only)"}
           </p>
           <p className="text-xs text-muted-foreground">
             SHA-256 <span className="font-mono break-all">{file.sha256}</span>
@@ -165,8 +165,13 @@ function OutputFileRow({ file, url, preview }: { file: OutputFileSummary; url: s
           {downloading ? "Downloading..." : "Download"}
         </Button>
       </div>
+      {preview && previewKind === null && (
+        <p className="text-xs text-amber-800 bg-amber-50 rounded px-3 py-1.5">
+          This file type cannot be previewed — download and inspect it with care before approving.
+        </p>
+      )}
       {error && <p className="text-xs text-red-700 bg-red-50 rounded px-3 py-1.5">{error}</p>}
-      {canPreview && open && <FilePreview file={file} url={url} />}
+      {canPreview && open && previewKind && <FilePreview file={file} url={url} kind={previewKind} />}
     </div>
   );
 }
@@ -178,7 +183,7 @@ type PreviewState =
   | { kind: "csv"; rows: string[][]; truncated: boolean }
   | { kind: "text"; text: string; truncated: boolean };
 
-function FilePreview({ file, url }: { file: OutputFileSummary; url: string }) {
+function FilePreview({ file, url, kind }: { file: OutputFileSummary; url: string; kind: NonNullable<OutputFilePreview> }) {
   const [state, setState] = useState<PreviewState>({ kind: "loading" });
 
   useEffect(() => {
@@ -186,7 +191,7 @@ function FilePreview({ file, url }: { file: OutputFileSummary; url: string }) {
     let objectUrl: string | null = null;
 
     (async () => {
-      const image = isImageType(file.type);
+      const image = kind === "image";
       const blob = await fetchFile(image ? `${url}?inline=1` : url, file);
       if (cancelled) return;
       if (image) {
@@ -196,7 +201,7 @@ function FilePreview({ file, url }: { file: OutputFileSummary; url: string }) {
       }
       const text = await blob.text();
       if (cancelled) return;
-      if (file.type === "text/csv") {
+      if (kind === "csv") {
         setState({ kind: "csv", ...parseCsv(text, CSV_PREVIEW_ROWS) });
         return;
       }
@@ -215,7 +220,7 @@ function FilePreview({ file, url }: { file: OutputFileSummary; url: string }) {
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [url, file.sha256]);
+  }, [url, file.sha256, kind]);
 
   switch (state.kind) {
     case "loading":

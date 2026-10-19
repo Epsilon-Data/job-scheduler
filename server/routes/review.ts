@@ -9,7 +9,7 @@ import {
     type ReviewJobSummary,
 } from "../storage";
 import { requireAuth, requireReviewer, asyncHandler } from "../middleware";
-import { manifestSha256, sendOutputFile, toFileSummary } from "../outputFiles";
+import { manifestSha256, requestedOutputFileName, sendOutputFile, toFileSummary } from "../outputFiles";
 
 const router = Router();
 
@@ -236,15 +236,17 @@ router.get("/jobs/:jobId", asyncHandler(async (req, res) => {
 
 /**
  * One file of a job's held (or decided) output, with the same access rules as the job detail
- * GET /api/review/jobs/:jobId/files/:name (?inline=1 shows an image inline)
+ * GET /api/review/jobs/:jobId/files/<name> (the name may hold "/"; ?inline=1 shows an image inline)
  */
-router.get("/jobs/:jobId/files/:name", asyncHandler(async (req, res) => {
+router.get("/jobs/:jobId/files/*", asyncHandler(async (req, res) => {
+    const name = requestedOutputFileName(req, res);
+    if (name === null) return;
     const row = await storage.getReviewJob(req.user!.id, req.params.jobId);
     if (!row) return refuse(res, "not_found");
     if (isOwnJob(row, req.user!.id)) return refuse(res, "own_job");
     if (!row.output) return refuse(res, "no_output");
 
-    const file = await storage.getJobOutputFile(row.job.jobId, req.params.name);
+    const file = await storage.getJobOutputFile(row.job.jobId, name);
     if (!file) return res.status(404).json({ message: "File not found", code: "FILE_NOT_FOUND" });
     await sendOutputFile(res, file, req.query.inline === "1");
 }));

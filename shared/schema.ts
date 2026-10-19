@@ -122,7 +122,7 @@ export const jobOutputs = pgTable("job_outputs", {
 // Files a real-data run wrote, held with its output; the bytes live in the output file store under storage_key
 export const jobOutputFiles = pgTable("job_output_files", {
   jobId: varchar("job_id", { length: 255 }).notNull().references(() => jobOutputs.jobId, { onDelete: "cascade" }),
-  name: varchar("name", { length: 100 }).notNull(),
+  name: varchar("name", { length: 255 }).notNull(),
   size: integer("size").notNull(),
   contentType: varchar("content_type", { length: 64 }).notNull(),
   sha256: varchar("sha256", { length: 64 }).notNull(),
