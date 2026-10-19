@@ -213,13 +213,13 @@ CREATE TABLE public.job_logs (
 
 CREATE TABLE public.job_output_files (
     job_id character varying(255) NOT NULL,
-    name character varying(100) NOT NULL,
+    name character varying(255) NOT NULL,
     size integer NOT NULL,
     content_type character varying(64) NOT NULL,
     sha256 character varying(64) NOT NULL,
     storage_key text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT job_output_files_name_check CHECK (((name)::text ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$'::text)),
+    CONSTRAINT job_output_files_name_check CHECK ((((name)::text ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,99}(/[A-Za-z0-9][A-Za-z0-9._-]{0,99}){0,4}$'::text) AND (char_length((name)::text) <= 255))),
     CONSTRAINT job_output_files_sha256_check CHECK (((sha256)::text ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT job_output_files_size_check CHECK ((size >= 0))
 );

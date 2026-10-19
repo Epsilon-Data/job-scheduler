@@ -6,7 +6,14 @@ import path from "path";
 import { randomUUID } from "crypto";
 import type { Server } from "http";
 import * as h from "./helpers";
-import { canonicalManifestJson, outputFileType } from "@shared/outputFiles";
+import {
+  canonicalManifestJson,
+  isValidOutputFileName,
+  outputFileBasename,
+  outputFilePreview,
+  outputFileType,
+  outputFileUrlPath,
+} from "@shared/outputFiles";
 import {
   OutputFileIntegrityError,
   localOutputFileStore,
@@ -59,11 +66,92 @@ describe("canonical file manifest", () => {
     );
   });
 
-  it("maps extensions with the contract's type table", () => {
+  it("hashes the subfolder and unknown-type vector, sorted by code point", () => {
+    const files = [
+      { name: "plots/fig.bin", bytes: Buffer.from([0x00, 0x01, 0x02]) },
+      { name: "notes", bytes: Buffer.from("hi\n") },
+      { name: "a.csv", bytes: Buffer.from("x,y\n1,2\n") },
+    ];
+    const entries = files.map((file) => ({
+      name: file.name,
+      size: file.bytes.length,
+      sha256: sha256Hex(file.bytes),
+      type: outputFileType(file.name),
+    }));
+    expect(canonicalManifestJson(entries)).toBe(
+      '[{"name":"a.csv","sha256":"81bf9fa83c6f7f151bd491a98cd7d933de3965289e3ebd77c6c425f7eaa16392","size":8,"type":"text/csv"},' +
+        '{"name":"notes","sha256":"98ea6e4f216f2fb4b69fff9b3a44842c38686ca685f3f55dc48c5d3fb1107be4","size":3,"type":"application/octet-stream"},' +
+        '{"name":"plots/fig.bin","sha256":"ae4b3280e56e2faf83f414a6e3dabe9d5fbe18976544c05fed121accb85b53fc","size":3,"type":"application/octet-stream"}]',
+    );
+    expect(manifestSha256(entries)).toBe("49f15dcc85c70e4712ab20edd5e118eb3ea2526e264da93628522a3a6c456907");
+  });
+
+  it("sorts by code point, not locale: upper case before lower case", () => {
+    const entry = (name: string) => ({ name, size: 0, sha256: "x", type: "t" });
+    const names = JSON.parse(canonicalManifestJson([entry("b"), entry("a/b"), entry("B"), entry("a.b")]))
+      .map((e: { name: string }) => e.name);
+    expect(names).toEqual(["B", "a.b", "a/b", "b"]);
+  });
+
+  it("maps the last segment's extension with the contract's type table, anything else to octet-stream", () => {
     expect(outputFileType("a.CSV")).toBe("text/csv");
     expect(outputFileType("a.jpeg")).toBe("image/jpeg");
-    expect(outputFileType("a.html")).toBeNull();
-    expect(outputFileType("noext")).toBeNull();
+    expect(outputFileType("plots/fig.png")).toBe("image/png");
+    expect(outputFileType("report.pdf")).toBe("application/pdf");
+    expect(outputFileType("a.html")).toBe("application/octet-stream");
+    expect(outputFileType("noext")).toBe("application/octet-stream");
+    expect(outputFileType("data.csv/raw")).toBe("application/octet-stream");
+    expect(outputFileType("x.constructor")).toBe("application/octet-stream");
+  });
+
+  it("previews only images, CSV, JSON and plain text", () => {
+    expect(outputFilePreview("image/png")).toBe("image");
+    expect(outputFilePreview("image/jpeg")).toBe("image");
+    expect(outputFilePreview("text/csv")).toBe("csv");
+    expect(outputFilePreview("application/json")).toBe("text");
+    expect(outputFilePreview("text/plain")).toBe("text");
+    expect(outputFilePreview("application/pdf")).toBeNull();
+    expect(outputFilePreview("application/octet-stream")).toBeNull();
+  });
+});
+
+describe("output file names", () => {
+  it("accepts relative paths of up to 5 segments and 255 characters", () => {
+    for (const name of ["a", "counts.csv", "plots/fig1.png", "a/b/c/d/e.txt", "A-1_x.y", `${"a".repeat(100)}/b`]) {
+      expect(isValidOutputFileName(name), name).toBe(true);
+    }
+    expect(isValidOutputFileName(Array(3).fill("a".repeat(84)).join("/"))).toBe(true); // 254 characters
+  });
+
+  it("rejects dot segments, hidden files, empty segments, depth over 5 and length over 255", () => {
+    for (const name of [
+      "",
+      ".",
+      "..",
+      "../a.csv",
+      "a/../b",
+      "a/./b",
+      ".hidden",
+      "plots/.hidden",
+      "/abs",
+      "a/",
+      "a//b",
+      "a\\b",
+      "a b",
+      "é.csv",
+      "a/b/c/d/e/f",
+      "a".repeat(101),
+      Array(3).fill("a".repeat(100)).join("/"),
+    ]) {
+      expect(isValidOutputFileName(name), name).toBe(false);
+    }
+  });
+
+  it("downloads under the basename and encodes each segment of the URL path", () => {
+    expect(outputFileBasename("plots/fig1.png")).toBe("fig1.png");
+    expect(outputFileBasename("notes")).toBe("notes");
+    expect(outputFileUrlPath("plots/fig1.png")).toBe("plots/fig1.png");
+    expect(outputFileUrlPath("a/b-c_d.e")).toBe("a/b-c_d.e");
   });
 });
 
@@ -314,6 +402,139 @@ describe.skipIf(!databaseUrl)("output files API (database tests, need TEST_DATAB
     const unconfigured = await get(`/api/review/jobs/${jobId}/files/${files[1].name}`, reviewer);
     expect(unconfigured.status).toBe(503);
     expect(unconfigured.body.code).toBe("FILE_STORE_UNAVAILABLE");
+  });
+
+  // A held job whose files sit in subfolders and include types that are never previewed
+  async function heldJobWithFolders() {
+    const userId = await h.createUser("user");
+    const jobId = await h.createJob({ userId, workspaceId: await h.createWorkspace(userId) });
+    const files: h.HeldFile[] = [
+      { name: "plots/2024/fig.png", bytes: PNG, type: "image/png" },
+      { name: "tables/counts.csv", bytes: CSV, type: "text/csv" },
+      { name: "model.bin", bytes: Buffer.from([0x00, 0x01, 0x02]), type: "application/octet-stream" },
+      { name: "notes", bytes: Buffer.from("<script>alert(1)</script>"), type: "application/octet-stream" },
+      { name: "report.pdf", bytes: Buffer.from("%PDF-1.4\n"), type: "application/pdf" },
+    ];
+    setOutputFileStore(store);
+    const outputSha256 = await h.completeWithHeldOutput(jobId, { kind: "result", content: "n=8\n", files, store });
+    return { userId, jobId, files, outputSha256, manifest: h.fileManifestSha256(files) };
+  }
+
+  it("reviewer downloads files in subfolders under their basename", async () => {
+    const { jobId } = await heldJobWithFolders();
+
+    const detail = await get(`/api/review/jobs/${jobId}`, reviewer);
+    expect(detail.body.files.map((file: { name: string }) => file.name))
+      .toEqual(["model.bin", "notes", "plots/2024/fig.png", "report.pdf", "tables/counts.csv"]);
+    expect(detail.body.files_manifest_matches).toBe(true);
+
+    const png = await download(`/api/review/jobs/${jobId}/files/plots/2024/fig.png?inline=1`, reviewer);
+    expect(png.status).toBe(200);
+    expect(png.body).toEqual(PNG);
+    expect(png.headers["content-type"]).toBe("image/png");
+    expect(png.headers["content-disposition"]).toBe('inline; filename="fig.png"');
+
+    // Encoded slashes name the same file
+    const csv = await download(`/api/review/jobs/${jobId}/files/tables%2Fcounts.csv`, reviewer);
+    expect(csv.status).toBe(200);
+    expect(csv.body).toEqual(CSV);
+    expect(csv.headers["content-disposition"]).toBe('attachment; filename="counts.csv"');
+    expect(csv.headers["x-content-type-options"]).toBe("nosniff");
+    expect(csv.headers["content-security-policy"]).toBe("sandbox");
+    expect(csv.headers["cache-control"]).toBe("private, no-store");
+
+    expect((await get(`/api/review/jobs/${jobId}/files/plots/missing.png`, reviewer)).status).toBe(404);
+  });
+
+  it("serves unknown types as octet-stream attachments and never shows a PDF inline", async () => {
+    const { jobId } = await heldJobWithFolders();
+
+    for (const name of ["model.bin", "notes"]) {
+      const file = await download(`/api/review/jobs/${jobId}/files/${name}?inline=1`, reviewer);
+      expect(file.status).toBe(200);
+      expect(file.headers["content-type"]).toBe("application/octet-stream");
+      expect(file.headers["content-disposition"]).toBe(`attachment; filename="${name}"`);
+      expect(file.headers["x-content-type-options"]).toBe("nosniff");
+      expect(file.headers["content-security-policy"]).toBe("sandbox");
+    }
+
+    const pdf = await download(`/api/review/jobs/${jobId}/files/report.pdf?inline=1`, reviewer);
+    expect(pdf.status).toBe(200);
+    expect(pdf.headers["content-type"]).toBe("application/pdf");
+    expect(pdf.headers["content-disposition"]).toBe('attachment; filename="report.pdf"');
+  });
+
+  it("answers 400 to names that break the rule, before reading the database or the store", async () => {
+    const { userId, jobId, outputSha256, manifest } = await heldJobWithFolders();
+    expect((await decide(jobId, { decision: "approve", output_sha256: outputSha256, files_manifest_sha256: manifest })).status)
+      .toBe(201);
+
+    let reads = 0;
+    setOutputFileStore({
+      get: (key) => {
+        reads += 1;
+        return store.get(key);
+      },
+      put: (key, bytes, type) => store.put(key, bytes, type),
+    });
+
+    const bad = [
+      "..",
+      "%2E%2E",
+      "plots/..",
+      "plots/%2E%2E/report.pdf",
+      ".hidden",
+      "plots/.hidden",
+      "a//b",
+      "a/b/c/d/e/f",
+      Array(3).fill("a".repeat(100)).join("/"),
+      "a".repeat(101),
+      "%00",
+    ];
+    for (const name of bad) {
+      for (const [urlPath, user] of [
+        [`/api/review/jobs/${jobId}/files/${name}`, reviewer],
+        [`/api/jobs/${jobId}/files/${name}`, userId],
+      ]) {
+        const response = await get(urlPath, user);
+        expect(response.status, urlPath).toBe(400);
+        expect(response.headers["content-disposition"]).toBeUndefined();
+      }
+    }
+    expect((await get(`/api/review/jobs/${jobId}/files/.hidden`, reviewer)).body.code).toBe("INVALID_FILE_NAME");
+    expect(reads).toBe(0);
+  });
+
+  it("released researchers download files in subfolders", async () => {
+    const { userId, jobId, outputSha256, manifest } = await heldJobWithFolders();
+    expect((await get(`/api/jobs/${jobId}/files/plots/2024/fig.png`, userId)).status).toBe(404);
+
+    expect((await decide(jobId, { decision: "approve", output_sha256: outputSha256, files_manifest_sha256: manifest })).status)
+      .toBe(201);
+
+    const png = await download(`/api/jobs/${jobId}/files/plots/2024/fig.png`, userId);
+    expect(png.status).toBe(200);
+    expect(png.body).toEqual(PNG);
+    expect(png.headers["content-disposition"]).toBe('attachment; filename="fig.png"');
+
+    const bin = await download(`/api/jobs/${jobId}/files/model.bin`, userId);
+    expect(bin.body).toEqual(Buffer.from([0x00, 0x01, 0x02]));
+    expect(bin.headers["content-type"]).toBe("application/octet-stream");
+    expect(bin.headers["content-disposition"]).toBe('attachment; filename="model.bin"');
+  });
+
+  it("the database refuses names that break the rule", async () => {
+    const { jobId } = await heldJobWithFolders();
+    const insert = (name: string) =>
+      h.query(
+        `INSERT INTO job_output_files (job_id, name, size, content_type, sha256, storage_key)
+         VALUES ($1, $2, 1, 'application/octet-stream', $3, 'k')`,
+        [jobId, name, "a".repeat(64)],
+      );
+    await insert("a/b/c/d/e.bin");
+    for (const name of ["../x", ".hidden", "a//b", "a/b/c/d/e/f", Array(3).fill("a".repeat(100)).join("/")]) {
+      await expect(insert(name), name).rejects.toMatchObject({ code: expect.stringMatching(/^(23514|22001)$/) });
+    }
   });
 
   it("a job without files keeps a null manifest and is decided without one", async () => {
