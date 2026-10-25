@@ -396,15 +396,20 @@ export async function markLegacyReleased(jobId: string) {
   });
 }
 
-export async function addJobLog(jobId: string, log: { message: string; errorDetails?: unknown }) {
+export async function addJobLog(
+  jobId: string,
+  log: { message: string; errorDetails?: unknown; workerName?: string; metadata?: unknown },
+) {
   await query(
-    `INSERT INTO job_logs (job_id, worker_name, step_name, step_type, level, message, error_details)
-     VALUES ($1, 'ExecutorWorker', 'enclave', 'execution', $2, $3, $4)`,
+    `INSERT INTO job_logs (job_id, worker_name, step_name, step_type, level, message, error_details, log_metadata)
+     VALUES ($1, $2, 'enclave', 'execution', $3, $4, $5, $6)`,
     [
       jobId,
+      log.workerName ?? "ExecutorWorker",
       log.errorDetails === undefined ? "info" : "error",
       log.message,
       log.errorDetails === undefined ? null : JSON.stringify(log.errorDetails),
+      log.metadata === undefined ? null : JSON.stringify(log.metadata),
     ],
   );
 }

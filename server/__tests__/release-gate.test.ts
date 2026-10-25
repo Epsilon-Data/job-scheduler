@@ -180,6 +180,50 @@ describe.skipIf(!databaseUrl)("output-release gate API (database tests, need TES
     }
   });
 
+  it("O1d: the AI pre-execution review never reaches researchers, released or not", async () => {
+    const researcher = await newResearcher();
+    const reasoning = marker("O1d-reasoning");
+    const policy = marker("O1d-policy");
+    for (const released of [false, true]) {
+      const jobId = await h.createJob({ ...researcher, aiDecision: "ai_rejected" });
+      await h.query(
+        `UPDATE job_requests
+            SET validation_status = '0.987654321', validation_policy = $2, validation_decision = $3, ai_logs = $3,
+                execution_metrics = $4
+          WHERE job_id = $1`,
+        [jobId, policy, reasoning, JSON.stringify({ total_ms: 1234, ai_decision: "ai_rejected" })],
+      );
+      await h.addJobLog(jobId, {
+        workerName: "AIAgentWorker",
+        message: `Repository rejected (confidence: 0.987654321) ${reasoning}`,
+        metadata: { confidence_score: 0.987654321, reasoning, risks_identified: ["Prints row-level identifiers"] },
+      });
+      await h.addJobLog(jobId, { message: "Enclave execution complete" });
+      await h.completeWithHeldOutput(jobId, { kind: "result", content: "42\n" });
+      // The reviewer still sees the AI verdict
+      const review = await get(`/api/review/jobs/${jobId}`, reviewer);
+      expect(JSON.stringify(review.body)).toContain("ai_rejected");
+      if (released) {
+        expect((await decide(jobId, { decision: "approve", output_sha256: h.sha256("42\n") }, reviewer)).status).toBe(201);
+      }
+
+      const views = await researcherViews(researcher, jobId);
+      expectAbsent(views.bodies, reasoning, policy, "ai_rejected", "AIAgentWorker", "Prints row-level identifiers", "0.987654321");
+      // detail and /api/jobs use snake_case keys; /api/user/jobs and workspace jobs pass the camelCase row
+      for (const view of [views.detail, views.listed, views.paged, views.inWorkspace]) {
+        for (const field of [
+          "validation_status", "validation_policy", "validation_decision", "ai_decision", "ai_logs",
+          "validationStatus", "validationPolicy", "validationDecision", "aiDecision", "aiLogs",
+        ]) {
+          expect(view[field] ?? null).toBeNull();
+        }
+        expect(view.ai_enabled ?? view.aiEnabled ?? false).toBe(false);
+      }
+      expect(views.detail.detailed_logs.map((log: { message: string }) => log.message)).toEqual(["Enclave execution complete"]);
+      expect(JSON.parse(views.detail.execution_metrics)).toEqual({ total_ms: 1234 });
+    }
+  });
+
   it("O2: after approval the researcher gets the exact held output and the decision record", async () => {
     const researcher = await newResearcher();
     const content = `mean_age=54.2\nn=1204\nnon-ASCII: café ✓ ${marker("O2")}\n`;

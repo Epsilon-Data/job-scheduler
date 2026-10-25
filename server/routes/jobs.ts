@@ -3,7 +3,7 @@ import { storage } from "../storage";
 import { type JobLogEntry } from "@shared/schema";
 import { githubApi } from "../github";
 import { requireAuth, requireResearcher, asyncHandler, NotFoundError, ForbiddenError } from "../middleware";
-import { toResearcherJob, toResearcherJobs, stripLogErrorDetails, loadReleasedFiles } from "../release";
+import { toResearcherJob, toResearcherJobs, toResearcherLogs, loadReleasedFiles } from "../release";
 import { requestedOutputFileName, sendOutputFile } from "../outputFiles";
 
 const router = Router();
@@ -49,10 +49,10 @@ router.get("/jobs/:jobId", requireAuth, requireResearcher, asyncHandler(async (r
     // Held output and error text stay hidden until a reviewer releases them
     const [jobRequest] = await toResearcherJobs([row]);
 
-    // Get job logs (error details can carry enclave output, so they are never returned)
+    // Get job logs (error details can carry enclave output, so they are never returned; nor are the AI review's entries)
     let detailedLogs: Omit<JobLogEntry, "errorDetails" | "error_details">[] = [];
     try {
-        detailedLogs = stripLogErrorDetails<JobLogEntry>(await storage.getJobLogs(jobRequest.jobId));
+        detailedLogs = toResearcherLogs<JobLogEntry>(await storage.getJobLogs(jobRequest.jobId));
     } catch (error) {
         console.warn(`Could not fetch job logs for ${jobRequest.jobId}:`, (error as Error).message);
     }
@@ -99,15 +99,11 @@ router.get("/jobs/:jobId", requireAuth, requireResearcher, asyncHandler(async (r
         commit_message: jobRequest.commitMessage,
         commit_time: jobRequest.commitDate,
         execution_method: jobRequest.executionMethod,
-        validation_status: jobRequest.validationStatus,
-        validation_policy: jobRequest.validationPolicy,
-        validation_decision: jobRequest.validationDecision,
         attestation: jobRequest.attestation,
         verification_receipt: jobRequest.verificationReceipt,
         execution_metrics: jobRequest.executionMetrics,
         enclave_version: jobRequest.enclaveVersion,
         enclave_pcr0: jobRequest.enclavePcr0,
-        ai_enabled: jobRequest.aiEnabled,
         zkp_enabled: jobRequest.zkpEnabled,
         release_status: jobRequest.releaseStatus,
         release: jobRequest.release,
@@ -115,15 +111,7 @@ router.get("/jobs/:jobId", requireAuth, requireResearcher, asyncHandler(async (r
             files: releasedFiles.files,
             files_manifest_sha256: releasedFiles.filesManifestSha256,
         }),
-        ai_decision: jobRequest.aiDecision,
         detailed_logs: detailedLogs,
-        ai_logs: detailedLogs
-            ?.filter(log => log.worker_name === "AIAgentWorker")
-            .map(log => {
-                const timestamp = log.created_at || log.createdAt;
-                return `[${timestamp ? new Date(timestamp).toLocaleString() : "Unknown"}] ${log.level.toUpperCase()}: ${log.message}${log.logMetadata ? " | " + JSON.stringify(log.logMetadata) : ""}`;
-            })
-            .join("\n") || jobRequest.aiLogs,
     });
 }));
 
@@ -180,9 +168,6 @@ router.get("/jobs", requireAuth, requireResearcher, asyncHandler(async (req, res
                 commit_message: job.commitMessage,
                 commit_time: job.commitDate,
                 execution_method: job.executionMethod,
-                validation_status: job.validationStatus,
-                validation_policy: job.validationPolicy,
-                validation_decision: job.validationDecision,
                 release_status: job.releaseStatus
             };
         })
