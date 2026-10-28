@@ -10,10 +10,15 @@ import { toFileSummary } from "./outputFiles";
 
 export type ResearcherJob<T extends JobRequest = JobRequest> = T & { release: JobRelease };
 
+// Coordinator worker that writes the AI pre-execution review's job log entries
+const AI_AGENT_WORKER = "AIAgentWorker";
+
 /**
  * Researcher-facing copy of a job row: output (and its hash), error text and output files
  * from a real-data run are only shown once a reviewer has released them. So are the attestation
  * and the verification receipt, which both carry the output hash.
+ * The AI pre-execution review is for reviewers only: its verdict, confidence, reasoning and
+ * policy never reach the researcher.
  */
 export function toResearcherJob<T extends JobRequest>(
   job: T,
@@ -47,6 +52,13 @@ export function toResearcherJob<T extends JobRequest>(
     outputSha256: visible ? job.outputSha256 : null,
     attestation: visible ? job.attestation : null,
     verificationReceipt: visible ? job.verificationReceipt : null,
+    validationStatus: null,
+    validationPolicy: null,
+    validationDecision: null,
+    aiDecision: null,
+    aiLogs: null,
+    aiEnabled: false,
+    executionMetrics: withoutAiDecision(job.executionMetrics),
     release: {
       status: job.releaseStatus,
       decision: decision
@@ -61,6 +73,21 @@ export function toResearcherJob<T extends JobRequest>(
         : null,
     },
   };
+}
+
+/**
+ * execution_metrics JSON without its ai_decision copy; text that is not a JSON object is dropped.
+ */
+function withoutAiDecision(executionMetrics: string | null): string | null {
+  if (!executionMetrics) return executionMetrics;
+  try {
+    const metrics = JSON.parse(executionMetrics);
+    if (!metrics || typeof metrics !== "object" || Array.isArray(metrics)) return null;
+    const { ai_decision, ...rest } = metrics;
+    return JSON.stringify(rest);
+  } catch {
+    return null;
+  }
 }
 
 export interface ReleasedFiles {
@@ -115,4 +142,16 @@ export function stripLogErrorDetails<T extends { errorDetails?: unknown; error_d
   logs: T[],
 ): Omit<T, "errorDetails" | "error_details">[] {
   return logs.map(({ errorDetails, error_details, ...entry }) => entry);
+}
+
+/**
+ * Job log entries for researchers, without the AI pre-execution review's entries
+ * (they carry its reasoning, risks and confidence).
+ */
+export function toResearcherLogs<
+  T extends { errorDetails?: unknown; error_details?: unknown; workerName?: string | null; worker_name?: string | null },
+>(logs: T[]): Omit<T, "errorDetails" | "error_details">[] {
+  return stripLogErrorDetails(
+    logs.filter((log) => (log.workerName ?? log.worker_name) !== AI_AGENT_WORKER),
+  );
 }

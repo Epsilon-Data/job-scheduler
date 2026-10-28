@@ -3,17 +3,16 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Download, ShieldCheck, CheckCircle, X, Loader2, ChevronDown, ChevronRight, Bot, AlertTriangle, Info, GitCommit, Clock, Cpu, Hourglass, Lock, ShieldX } from "lucide-react";
+import { Download, ShieldCheck, CheckCircle, X, Loader2, ChevronDown, ChevronRight, GitCommit, Clock, Cpu, Hourglass, Lock, ShieldX } from "lucide-react";
 import { Link } from "wouter";
 import { useState } from "react";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { OutputFilesCard } from "@/components/output-files";
 import { getJobStatusColor, getReleaseStatus, getReleaseStatusBadge } from "@/lib/status-utils";
 import { HELD_ERROR_MESSAGE, type JobRelease, type JobRequest } from "@shared/schema";
-import type { JobLog, AIAnalysisResult } from "@/types/job";
+import type { JobLog } from "@/types/job";
 import { API_CONFIG, RELEASE_PENDING_BANNER, RELEASE_WITHHELD_TITLE } from "@/lib/constants";
 import { safeJsonParse } from "@/lib/job-utils";
-import { AI_REVIEW_UNAVAILABLE, isAiReviewUnavailable } from "@shared/aiReview";
 
 interface JobRequestDetailProps {
   params: { id: string };
@@ -23,11 +22,8 @@ const POLL_INTERVAL = 10000; // 10 seconds
 const RELEASE_POLL_INTERVAL = 30000; // 30 seconds: a review takes longer than a run
 
 function isFullyComplete(job: JobRequest): boolean {
-  const terminalStatuses = ["success", "failed", "rejected", "ai_rejected"];
-  const statusDone = terminalStatuses.includes(job.status);
-  const aiEnabled = job.ai_enabled ?? job.aiEnabled ?? false;
-  const aiDone = !aiEnabled || !!(job.validation_decision ?? job.validationDecision);
-  return statusDone && aiDone;
+  const terminalStatuses = ["success", "failed", "rejected"];
+  return terminalStatuses.includes(job.status);
 }
 
 export default function JobRequestDetail({ params }: JobRequestDetailProps) {
@@ -49,8 +45,6 @@ export default function JobRequestDetail({ params }: JobRequestDetailProps) {
   if (isLoading) return <LoadingSpinner message="Loading job details..." />;
   if (error) return <ErrorState message={(error as Error).message} />;
   if (!jobRequest) return <NotFoundState jobId={params.id} />;
-
-  const aiEnabled = jobRequest.ai_enabled ?? jobRequest.aiEnabled ?? false;
 
   return (
     <div className="min-h-screen bg-background">
@@ -89,9 +83,6 @@ export default function JobRequestDetail({ params }: JobRequestDetailProps) {
         {getReleaseStatus(jobRequest) === 'pending'
           ? <AttestationHeldNotice />
           : <AttestationSummary jobRequest={jobRequest} />}
-
-        {/* AI Policy Analysis — visually separated */}
-        {aiEnabled && <AIAnalysisSection jobRequest={jobRequest} />}
 
         {/* Detailed Timeline — collapsed */}
         <DetailedTimeline jobRequest={jobRequest} />
@@ -253,7 +244,7 @@ const PIPELINE_STEPS = [
 
 function getCompletedSteps(status: string): number {
   const statusMap: Record<string, number> = {
-    'pending': 0, 'queued': 1, 'cloning': 1, 'cloned': 2, 'ai_approved': 2,
+    'pending': 0, 'queued': 1, 'cloning': 1, 'cloned': 2,
     'executing': 4, 'success': 7, 'failed': 4, 'rejected': 3,
   };
   return statusMap[status] ?? 0;
@@ -505,10 +496,6 @@ function AttestationSummary({ jobRequest }: { jobRequest: JobRequest }) {
     typeof (jobRequest as any).execution_metrics === 'string'
       ? (jobRequest as any).execution_metrics : null, null
   );
-  // The ai_decision column comes first; execution_metrics.ai_decision is the older copy
-  const aiDecision: string | null = jobRequest.ai_decision ?? jobRequest.aiDecision ?? metrics?.ai_decision ?? null;
-  const aiUnavailable = isAiReviewUnavailable(aiDecision, jobRequest.validationDecision);
-
   return (
     <Card className="mb-6">
       <CardHeader className="pb-2">
@@ -675,7 +662,7 @@ function AttestationSummary({ jobRequest }: { jobRequest: JobRequest }) {
         )}
 
         {/* Execution Metrics */}
-        {(metrics || aiDecision) && (
+        {metrics && (
           <>
             <div className="border-t pt-3">
               <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Execution Metrics</span>
@@ -703,14 +690,6 @@ function AttestationSummary({ jobRequest }: { jobRequest: JobRequest }) {
                 <div>
                   <span className="text-muted-foreground text-xs">Total</span>
                   <p className="font-mono text-xs">{(metrics.total_ms / 1000).toFixed(2)}s</p>
-                </div>
-              )}
-              {aiDecision && (
-                <div>
-                  <span className="text-muted-foreground text-xs">AI Decision</span>
-                  <Badge variant="outline" className="text-xs">
-                    {aiUnavailable ? AI_REVIEW_UNAVAILABLE : aiDecision.replace(/_/g, ' ')}
-                  </Badge>
                 </div>
               )}
             </div>
@@ -748,190 +727,6 @@ function AttestationSummary({ jobRequest }: { jobRequest: JobRequest }) {
 
       </CardContent>
     </Card>
-  );
-}
-
-/* ── AI Analysis Section (Independent) ───────────────────────── */
-
-function AIAnalysisSection({ jobRequest }: { jobRequest: JobRequest }) {
-  const [showLogs, setShowLogs] = useState(false);
-  const aiLogs = jobRequest.ai_logs || jobRequest.aiLogs;
-  const validationStatus = jobRequest.validationStatus || (jobRequest as any).validation_status;
-  const validationDecision = jobRequest.validationDecision || (jobRequest as any).validation_decision;
-
-  const confidence = validationStatus ? parseFloat(validationStatus) : null;
-  // A failed review is stored as a decision too (with a made-up confidence); it is not a verdict
-  const isError = isAiReviewUnavailable(jobRequest.ai_decision ?? jobRequest.aiDecision, validationDecision);
-  const isLoading = !validationStatus && !validationDecision;
-
-  // Parse risks from ai_logs (must be before isApproved)
-  let risks: string[] = [];
-  try {
-    const parsed = typeof aiLogs === 'string' ? JSON.parse(aiLogs) : aiLogs;
-    if (Array.isArray(parsed)) risks = parsed;
-  } catch {}
-
-  // Determine approval: if risks exist it's rejected, otherwise check confidence
-  const isApproved = risks.length === 0 && confidence !== null && confidence >= 0.8;
-
-  // Get AI-specific detailed logs
-  const detailedLogs = ((jobRequest.detailed_logs || jobRequest.detailedLogs) as JobLog[] | undefined)
-    ?.filter(log => (log.worker_name || log.workerName) === 'AIAgentWorker')
-    ?.sort((a, b) => new Date(a.created_at || a.createdAt || 0).getTime() - new Date(b.created_at || b.createdAt || 0).getTime());
-
-  return (
-    <div className="mb-6">
-      <div className="border-t border-dashed pt-6 mb-4">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground mb-3">
-          <Bot className="h-4 w-4" />
-          <span className="font-medium">AI Policy Analysis</span>
-          <Badge variant="outline" className="text-xs">Beta</Badge>
-        </div>
-      </div>
-
-      {/* Loading State */}
-      {isLoading && (
-        <Card className="border-blue-200">
-          <CardContent className="pt-4">
-            <div className="flex items-center gap-3">
-              <Loader2 className="h-5 w-5 text-blue-600 animate-spin shrink-0" />
-              <div>
-                <p className="font-medium text-sm text-blue-800">AI Analysis in Progress</p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  CrewAI agents are analyzing the code for security risks. This typically takes 30-60 seconds.
-                </p>
-              </div>
-            </div>
-            {/* Show any logs that arrived so far */}
-            {detailedLogs && detailedLogs.length > 0 && (
-              <div className="mt-3 space-y-1">
-                {detailedLogs.map((log, i) => (
-                  <div key={i} className="flex items-center gap-2 text-xs text-blue-700">
-                    <CheckCircle className="h-3 w-3 shrink-0" />
-                    <span>{log.message}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Error State */}
-      {isError && (
-        <Card className="border-red-200">
-          <CardContent className="pt-4">
-            <div className="flex items-start gap-3">
-              <X className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-medium text-sm text-red-800">{AI_REVIEW_UNAVAILABLE}</p>
-                <p className="text-sm text-muted-foreground mt-1">{validationDecision}</p>
-                <div className="flex items-start gap-1.5 mt-3 text-xs text-muted-foreground bg-muted rounded px-3 py-2">
-                  <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                  <span>AI analysis failure does not affect job execution or attestation.</span>
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Result State */}
-      {!isLoading && !isError && confidence !== null && (
-        <Card className={isApproved ? 'border-green-200' : risks.length > 0 ? 'border-red-200' : 'border-amber-200'}>
-          <CardContent className="pt-4">
-            <div className="flex items-start gap-3">
-              {isApproved ? (
-                <CheckCircle className="h-5 w-5 text-green-600 shrink-0 mt-0.5" />
-              ) : risks.length > 0 ? (
-                <X className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
-              ) : (
-                <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
-              )}
-              <div className="flex-1">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="font-medium text-sm">
-                    {isApproved ? 'Approved' : risks.length > 0 ? 'Rejected' : 'Flagged for Review'}
-                  </span>
-                  <Badge variant="outline" className="text-xs">
-                    Confidence: {Math.round(confidence * 100)}%
-                  </Badge>
-                </div>
-
-                {validationDecision && (
-                  <p className="text-sm text-muted-foreground mt-1">{validationDecision}</p>
-                )}
-
-              {risks.length > 0 && (
-                <div className="flex gap-1.5 mt-2 flex-wrap">
-                  {risks.map((risk, i) => (
-                    <Badge key={i} variant="secondary" className="text-xs">{risk}</Badge>
-                  ))}
-                </div>
-              )}
-
-              <div className="flex items-start gap-1.5 mt-3 text-xs text-muted-foreground bg-muted rounded px-3 py-2">
-                <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                <span>
-                  AI analysis is informational only and does not affect execution or attestation.
-                  The AI agent operates outside the Trusted Computing Base.
-                </span>
-              </div>
-
-              {/* CrewAI Logs Toggle */}
-              {detailedLogs && detailedLogs.length > 0 && (
-                <div className="mt-3">
-                  <button
-                    onClick={() => setShowLogs(!showLogs)}
-                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-                  >
-                    {showLogs ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                    Agent Logs ({detailedLogs.length} events)
-                  </button>
-                  {showLogs && (
-                    <div className="mt-2 space-y-1 bg-muted/50 rounded-lg p-3">
-                      {detailedLogs.map((log, i) => {
-                        const stepType = log.step_type || log.stepType;
-                        const isCrewTask = stepType === 'ai_crew_task';
-                        const agentMatch = isCrewTask ? log.message.match(/^\[([^\]]+)\]\s*([\s\S]*)/) : null;
-                        const agentName = agentMatch ? agentMatch[1] : null;
-                        const agentMessage = agentMatch ? agentMatch[2] : log.message;
-
-                        return (
-                          <div key={i} className={`text-xs py-1 ${isCrewTask ? 'border-l-2 border-blue-200 pl-2 my-2' : 'flex items-start gap-2 py-0.5'}`}>
-                            <div className="flex items-center gap-2">
-                              <span className="text-muted-foreground shrink-0 w-16">
-                                {new Date(log.created_at || log.createdAt || '').toLocaleTimeString()}
-                              </span>
-                              <Badge variant="outline" className="text-[10px] shrink-0">
-                                {stepType}
-                              </Badge>
-                              {agentName && (
-                                <Badge className="text-[10px] bg-blue-100 text-blue-800 border-blue-200">
-                                  {agentName}
-                                </Badge>
-                              )}
-                            </div>
-                            {isCrewTask ? (
-                              <pre className="text-foreground mt-1 whitespace-pre-wrap leading-relaxed text-xs font-sans max-h-60 overflow-y-auto bg-background/50 rounded p-2">
-                                {agentMessage.trim()}
-                              </pre>
-                            ) : (
-                              <span className="text-foreground">{log.message}</span>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-      )}
-    </div>
   );
 }
 
