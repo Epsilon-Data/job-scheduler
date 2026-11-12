@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { HELD_ERROR_MESSAGE, type JobOutput, type JobRequest, type ReleaseDecision } from "@shared/schema";
-import { stripLogErrorDetails, toResearcherJob } from "../release";
+import { runDetailsVisible, stripLogErrorDetails, toResearcherJob, toResearcherLogs } from "../release";
 
 // The view itself is pure; keep the database out of this unit test
 vi.mock("../storage", () => ({ storage: {} }));
@@ -238,5 +238,66 @@ describe("stripLogErrorDetails", () => {
       { id: "2", level: "error", message: "failed" },
       { id: "3", level: "info", message: "started" },
     ]);
+  });
+});
+
+describe("run details before release", () => {
+  const metrics = JSON.stringify({ total_ms: 4217.5, enclave_internal: { script_execution_ms: 3120 }, ai_decision: "approve" });
+  const resultMetadata = "/shared/repositories/JOB-UNIT";
+
+  it("are visible only once the output is released or when nothing was held", () => {
+    expect([null, undefined, "pending", "withheld", "released", "not_required"].map(runDetailsVisible))
+      .toEqual([false, false, false, false, true, true]);
+  });
+
+  it("hides the run's metrics, result metadata and exit code while in flight, pending or withheld", () => {
+    for (const releaseStatus of [null, "pending", "withheld"] as const) {
+      const view = toResearcherJob(
+        job({ releaseStatus, executionMetrics: metrics, resultMetadata, exitCode: 3 }),
+        output("result", RESULT),
+      );
+      expect(view).toMatchObject({ executionMetrics: null, resultMetadata: null, exitCode: null });
+      expect(JSON.stringify(view)).not.toContain("3120");
+      expect(JSON.stringify(view)).not.toContain("/shared/repositories");
+    }
+  });
+
+  it("shows them, without the AI decision, once released or when release is not required", () => {
+    for (const releaseStatus of ["released", "not_required"] as const) {
+      const view = toResearcherJob(
+        job({ releaseStatus, executionMetrics: metrics, resultMetadata, exitCode: 3 }),
+        output("result", RESULT),
+        releaseStatus === "released" ? decision() : null,
+      );
+      expect(view).toMatchObject({ resultMetadata, exitCode: 3 });
+      expect(JSON.parse(view.executionMetrics!)).toEqual({ total_ms: 4217.5, enclave_internal: { script_execution_ms: 3120 } });
+    }
+  });
+});
+
+describe("toResearcherLogs", () => {
+  const logs = [
+    { id: "1", workerName: "JobFetcher", message: "Job queued" },
+    { id: "2", worker_name: "CloneWorker", message: "Repository cloned" },
+    { id: "3", workerName: "AIAgentWorker", message: "Decision: approve (confidence 0.93)" },
+    { id: "4", workerName: "ExecutorWorker", message: "Sending to enclave for execution" },
+    { id: "5", worker_name: "ExecutorWorker", message: "Job executed successfully in 4.22s", errorDetails: { error: ENCLAVE_ERROR } },
+  ];
+
+  it("leaves out the run's own entries while in flight, pending or withheld", () => {
+    for (const releaseStatus of [null, undefined, "pending", "withheld"]) {
+      const shown = toResearcherLogs(logs, releaseStatus);
+      expect(shown.map((log) => log.id)).toEqual(["1", "2"]);
+      expect(JSON.stringify(shown)).not.toContain("4.22s");
+    }
+  });
+
+  it("shows the run's entries once released or when release is not required, never the AI review or error details", () => {
+    for (const releaseStatus of ["released", "not_required"]) {
+      const shown = toResearcherLogs(logs, releaseStatus);
+      expect(shown.map((log) => log.id)).toEqual(["1", "2", "4", "5"]);
+      expect(JSON.stringify(shown)).not.toContain("patient 1234");
+      expect(JSON.stringify(shown)).not.toContain("confidence");
+    }
   });
 });

@@ -49,10 +49,11 @@ router.get("/jobs/:jobId", requireAuth, requireResearcher, asyncHandler(async (r
     // Held output and error text stay hidden until a reviewer releases them
     const [jobRequest] = await toResearcherJobs([row]);
 
-    // Get job logs (error details can carry enclave output, so they are never returned; nor are the AI review's entries)
+    // Get job logs (error details can carry enclave output, so they are never returned; nor are the AI review's
+    // entries, nor the run's own entries before its output is released)
     let detailedLogs: Omit<JobLogEntry, "errorDetails" | "error_details">[] = [];
     try {
-        detailedLogs = toResearcherLogs<JobLogEntry>(await storage.getJobLogs(jobRequest.jobId));
+        detailedLogs = toResearcherLogs<JobLogEntry>(await storage.getJobLogs(jobRequest.jobId), jobRequest.releaseStatus);
     } catch (error) {
         console.warn(`Could not fetch job logs for ${jobRequest.jobId}:`, (error as Error).message);
     }
