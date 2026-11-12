@@ -12,11 +12,24 @@ export type ResearcherJob<T extends JobRequest = JobRequest> = T & { release: Jo
 
 // Coordinator worker that writes the AI pre-execution review's job log entries
 const AI_AGENT_WORKER = "AIAgentWorker";
+// Coordinator worker that runs the job against real data and writes its log entries
+const EXECUTOR_WORKER = "ExecutorWorker";
+
+/**
+ * Whether what a run left behind besides its output (log entries, metrics, metadata, exit code)
+ * may be shown to the researcher: once a reviewer released the output, or when nothing was held
+ * because the job ended before real data was requested. Not while the job is in flight, pending
+ * or withheld: a script controls how long it runs and how it ends.
+ */
+export function runDetailsVisible(releaseStatus: string | null | undefined): boolean {
+  return releaseStatus === "released" || releaseStatus === "not_required";
+}
 
 /**
  * Researcher-facing copy of a job row: output (and its hash), error text and output files
  * from a real-data run are only shown once a reviewer has released them. So are the attestation
- * and the verification receipt, which both carry the output hash.
+ * and the verification receipt, which both carry the output hash. The run's metrics, result
+ * metadata and exit code follow runDetailsVisible.
  * The AI pre-execution review is for reviewers only: its verdict, confidence, reasoning and
  * policy never reach the researcher.
  */
@@ -26,6 +39,7 @@ export function toResearcherJob<T extends JobRequest>(
   decision?: ReleaseDecision | null,
 ): ResearcherJob<T> {
   const visible = job.releaseStatus === "released";
+  const runDetails = runDetailsVisible(job.releaseStatus);
 
   let executionOutput: string | null = null;
   if (visible) {
@@ -58,7 +72,9 @@ export function toResearcherJob<T extends JobRequest>(
     aiDecision: null,
     aiLogs: null,
     aiEnabled: false,
-    executionMetrics: withoutAiDecision(job.executionMetrics),
+    executionMetrics: runDetails ? withoutAiDecision(job.executionMetrics) : null,
+    resultMetadata: runDetails ? job.resultMetadata : null,
+    exitCode: runDetails ? job.exitCode : null,
     release: {
       status: job.releaseStatus,
       decision: decision
@@ -146,12 +162,15 @@ export function stripLogErrorDetails<T extends { errorDetails?: unknown; error_d
 
 /**
  * Job log entries for researchers, without the AI pre-execution review's entries
- * (they carry its reasoning, risks and confidence).
+ * (they carry its reasoning, risks and confidence). The entries of the worker that runs the
+ * job against real data are left out until runDetailsVisible: they say how the run went and
+ * how long it took.
  */
 export function toResearcherLogs<
   T extends { errorDetails?: unknown; error_details?: unknown; workerName?: string | null; worker_name?: string | null },
->(logs: T[]): Omit<T, "errorDetails" | "error_details">[] {
+>(logs: T[], releaseStatus: string | null | undefined): Omit<T, "errorDetails" | "error_details">[] {
+  const hidden = new Set(runDetailsVisible(releaseStatus) ? [AI_AGENT_WORKER] : [AI_AGENT_WORKER, EXECUTOR_WORKER]);
   return stripLogErrorDetails(
-    logs.filter((log) => (log.workerName ?? log.worker_name) !== AI_AGENT_WORKER),
+    logs.filter((log) => !hidden.has((log.workerName ?? log.worker_name) ?? "")),
   );
 }

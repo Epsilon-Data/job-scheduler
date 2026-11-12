@@ -170,14 +170,56 @@ describe.skipIf(!databaseUrl)("output-release gate API (database tests, need TES
     await h.markLegacyReleased(released);
     await h.addJobLog(released, { message: "Enclave returned failure", errorDetails: { error: releasedMarker } });
 
-    for (const [jobId, logMarker] of [[pending, pendingMarker], [released, releasedMarker]]) {
+    // Before release the run's own log entries are not returned at all
+    const pendingViews = await researcherViews(researcher, pending);
+    expectAbsent(pendingViews.bodies, pendingMarker, "Enclave returned failure");
+    expect(pendingViews.detail.detailed_logs).toEqual([]);
+
+    const views = await researcherViews(researcher, released);
+    expectAbsent(views.bodies, releasedMarker);
+    expect(views.detail.detailed_logs).toHaveLength(1);
+    expect(views.detail.detailed_logs[0].message).toBe("Enclave returned failure");
+    expect(views.detail.detailed_logs[0]).not.toHaveProperty("errorDetails");
+    expect(views.detail.detailed_logs[0]).not.toHaveProperty("error_details");
+  });
+
+  it("O1e: the run's log entries, metrics, result metadata and exit code are held until release", async () => {
+    const researcher = await newResearcher();
+    const timing = marker("O1e-timing");
+    const repoPath = marker("O1e-repo-path");
+    const metrics = JSON.stringify({ total_ms: 4217.5, enclave_internal: { script_execution_ms: timing } });
+    const hold = async (kind: "result" | "error") => {
+      const jobId = await h.createJob(researcher);
+      await h.query(
+        `UPDATE job_requests SET execution_metrics = $2, result_metadata = $3, exit_code = 3 WHERE job_id = $1`,
+        [jobId, metrics, repoPath],
+      );
+      await h.addJobLog(jobId, { workerName: "CloneWorker", message: "Repository cloned" });
+      await h.addJobLog(jobId, { message: `Job executed successfully in ${timing}s` });
+      await h.completeWithHeldOutput(jobId, { kind, content: "42\n" });
+      return jobId;
+    };
+
+    const pending = await hold("result");
+    const withheld = await hold("error");
+    expect((await decide(withheld, { decision: "reject", output_sha256: h.sha256("42\n"), reason: "row-level" }, reviewer)).status).toBe(201);
+    for (const jobId of [pending, withheld]) {
       const views = await researcherViews(researcher, jobId);
-      expectAbsent(views.bodies, logMarker);
-      expect(views.detail.detailed_logs).toHaveLength(1);
-      expect(views.detail.detailed_logs[0].message).toBe("Enclave returned failure");
-      expect(views.detail.detailed_logs[0]).not.toHaveProperty("errorDetails");
-      expect(views.detail.detailed_logs[0]).not.toHaveProperty("error_details");
+      expectAbsent(views.bodies, timing, repoPath, "4217.5");
+      expect(views.detail.detailed_logs.map((log: { message: string }) => log.message)).toEqual(["Repository cloned"]);
+      for (const view of [views.detail, views.listed, views.paged, views.inWorkspace]) {
+        expect(view.exit_code ?? view.exitCode ?? null).toBeNull();
+        expect(view.result_metadata ?? view.resultMetadata ?? null).toBeNull();
+      }
+      expect(views.detail.execution_metrics).toBeNull();
     }
+
+    const released = await hold("result");
+    expect((await decide(released, { decision: "approve", output_sha256: h.sha256("42\n") }, reviewer)).status).toBe(201);
+    const views = await researcherViews(researcher, released);
+    expect(views.detail.detailed_logs.map((log: { message: string }) => log.message))
+      .toEqual(["Repository cloned", `Job executed successfully in ${timing}s`]);
+    expect(views.detail).toMatchObject({ exit_code: 3, result_metadata: repoPath, execution_metrics: metrics });
   });
 
   it("O1d: the AI pre-execution review never reaches researchers, released or not", async () => {
@@ -219,8 +261,14 @@ describe.skipIf(!databaseUrl)("output-release gate API (database tests, need TES
         }
         expect(view.ai_enabled ?? view.aiEnabled ?? false).toBe(false);
       }
-      expect(views.detail.detailed_logs.map((log: { message: string }) => log.message)).toEqual(["Enclave execution complete"]);
-      expect(JSON.parse(views.detail.execution_metrics)).toEqual({ total_ms: 1234 });
+      // The run's own entries and metrics follow the release; the AI review's never show
+      if (released) {
+        expect(views.detail.detailed_logs.map((log: { message: string }) => log.message)).toEqual(["Enclave execution complete"]);
+        expect(JSON.parse(views.detail.execution_metrics)).toEqual({ total_ms: 1234 });
+      } else {
+        expect(views.detail.detailed_logs).toEqual([]);
+        expect(views.detail.execution_metrics).toBeNull();
+      }
     }
   });
 
